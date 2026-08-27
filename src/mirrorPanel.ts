@@ -8,6 +8,7 @@ import {
   UiNode
 } from './android/uiautomator';
 import { classifySwipeDirection } from './gestures';
+import { navActionSpec } from './deviceNav';
 
 interface FlowConfig {
   appId?: string;
@@ -32,6 +33,8 @@ export class AndroidMirrorPanel {
   private screenSize: { width: number; height: number } | undefined;
   private allNodes: UiNode[] = [];
   private dumping = false;
+  /** Last reported hierarchy problem, so the 2.5s poll does not spam notifications. */
+  private hierarchyProblem: string | undefined;
   private optional = false;
   private darkMode = false;
   private disposed = false;
@@ -74,6 +77,11 @@ export class AndroidMirrorPanel {
     });
   }
 
+  /** Brings an existing mirror back into view without re-resolving the flow it records into. */
+  public reveal(): void {
+    this.panel.reveal(vscode.ViewColumn.Beside);
+  }
+
   private async init(): Promise<void> {
     try {
       this.screenSize = await adb.getScreenSize(this.deviceId);
@@ -88,12 +96,7 @@ export class AndroidMirrorPanel {
     const intervalMs = 700;
     const tick = async () => {
       if (this.disposed) return;
-      try {
-        const png = await adb.screenshot(this.deviceId);
-        this.panel.webview.postMessage({ type: 'frame', data: png.toString('base64') });
-      } catch {
-        // Device briefly busy or reconnecting - keep polling.
-      }
+      await this.pushFrame();
       if (!this.disposed) {
         this.pollTimer = setTimeout(tick, intervalMs);
       }
@@ -111,6 +114,16 @@ export class AndroidMirrorPanel {
       }
     };
     tick();
+  }
+
+  /** Captures one frame and pushes it to the webview. Used by the poll and by Reload. */
+  private async pushFrame(): Promise<void> {
+    try {
+      const png = await adb.screenshot(this.deviceId);
+      this.panel.webview.postMessage({ type: 'frame', data: png.toString('base64') });
+    } catch {
+      // Device briefly busy or reconnecting - the next poll tick catches up.
+    }
   }
 
   private async refreshElements(): Promise<void> {
@@ -139,11 +152,29 @@ export class AndroidMirrorPanel {
         };
       });
       this.panel.webview.postMessage({ type: 'elements', nodes: payload });
-    } catch {
-      // Hierarchy dump can fail transiently; keep the previous overlay.
+      // Recovered - clear any standing problem banner and re-arm the one-shot notification.
+      if (this.hierarchyProblem) {
+        this.hierarchyProblem = undefined;
+        this.panel.webview.postMessage({ type: 'hierarchyOk' });
+      }
+    } catch (err: any) {
+      this.reportHierarchyFailure(err);
     } finally {
       this.dumping = false;
     }
+  }
+
+  /**
+   * Surfaces a hierarchy failure instead of swallowing it. The element poll runs every 2.5s,
+   * so the VS Code notification fires only when the message changes - the webview banner is
+   * what stays visible while the problem persists.
+   */
+  private reportHierarchyFailure(err: any): void {
+    const message: string = err?.message || 'Element hierarchy could not be read.';
+    this.panel.webview.postMessage({ type: 'hierarchyError', text: message });
+    if (this.hierarchyProblem === message) return;
+    this.hierarchyProblem = message;
+    vscode.window.showWarningMessage(message);
   }
 
   private async emit(step: any): Promise<void> {
@@ -237,7 +268,40 @@ export class AndroidMirrorPanel {
       case 'assertNotVisible':
         await this.handleAssert(msg.elementId, false);
         break;
+      case 'nav':
+        await this.handleNav(msg.action);
+        break;
     }
+  }
+
+  /**
+   * Android nav-bar buttons. Back and Home map onto real Maestro commands and are recorded;
+   * Recents drives the device only (Maestro has no app-switch command) and Reload just
+   * re-polls the mirror. See src/deviceNav.ts for that policy.
+   */
+  private async handleNav(action: string): Promise<void> {
+    let spec;
+    try {
+      spec = navActionSpec(action);
+    } catch {
+      return;
+    }
+
+    if (spec.keycode !== null) {
+      try {
+        await adb.pressKeycode(this.deviceId, spec.keycode);
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`Failed to send ${action} to device: ${err.message}`);
+        return;
+      }
+    }
+    if (spec.step !== null) {
+      await this.emit(spec.step);
+    }
+    // Every nav action changes what is on screen, so refresh the frame and hierarchy now
+    // instead of waiting out the poll interval.
+    void this.pushFrame();
+    void this.refreshElements();
   }
 
   private async handleRawTap(xPct: number, yPct: number): Promise<void> {
@@ -567,6 +631,7 @@ export class AndroidMirrorPanel {
 </head>
 <body>
   <div id="status">Connecting to device...</div>
+  <div id="hierarchy-banner" class="hidden"></div>
   <div id="mirror-body">
     <div id="stage">
       <canvas id="screen"></canvas>
@@ -574,9 +639,13 @@ export class AndroidMirrorPanel {
       <div id="selection">
         <span id="selection-badge"></span>
       </div>
-      <div id="tooltip">
-        <div id="overlap-stack"></div>
-      </div>
+    </div>
+    <div id="device-nav">
+      <button type="button" data-nav="back" title="Back - records `back`">&#9665;</button>
+      <button type="button" data-nav="home" title="Home - records `pressKey: home`">&#9711;</button>
+      <button type="button" data-nav="recents" title="Recents - drives the device, not recorded">&#9723;</button>
+      <span class="nav-sep"></span>
+      <button type="button" data-nav="reload" title="Reload screen and elements - not recorded">&#8635;</button>
     </div>
   </div>
   <div id="context-menu" class="hidden"></div>

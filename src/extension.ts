@@ -11,18 +11,52 @@ import * as adb from './android/adb';
  * tab, which works for both custom editors and, as a fallback, plain text editors (e.g. if
  * someone reopened the file with "Reopen Editor With... > Text Editor").
  */
-async function getActiveFlowDocument(): Promise<vscode.TextDocument | undefined> {
-  const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
+function flowUriFromTab(tab: vscode.Tab | undefined): vscode.Uri | undefined {
   const input = tab?.input;
-  if (input instanceof vscode.TabInputCustom && input.uri.fsPath.endsWith('.flow.yaml')) {
-    return vscode.workspace.openTextDocument(input.uri);
+  if (
+    (input instanceof vscode.TabInputCustom || input instanceof vscode.TabInputText) &&
+    input.uri.fsPath.endsWith('.flow.yaml')
+  ) {
+    return input.uri;
   }
-  if (input instanceof vscode.TabInputText && input.uri.fsPath.endsWith('.flow.yaml')) {
-    return vscode.workspace.openTextDocument(input.uri);
+  return undefined;
+}
+
+async function getActiveFlowDocument(): Promise<vscode.TextDocument | undefined> {
+  // 1. The tab the user is actually looking at.
+  const activeUri = flowUriFromTab(vscode.window.tabGroups.activeTabGroup.activeTab);
+  if (activeUri) {
+    return vscode.workspace.openTextDocument(activeUri);
   }
+
   const active = vscode.window.activeTextEditor;
   if (active && active.document.fileName.endsWith('.flow.yaml')) {
     return active.document;
+  }
+
+  // 2. Any flow open in any group. The mirror panel opens in ViewColumn.Beside and takes
+  //    focus, so re-running the command with the mirror focused would otherwise report "no
+  //    flow open" even though the flow being recorded sits in the group next to it.
+  const openFlows: vscode.Uri[] = [];
+  const seen = new Set<string>();
+  for (const group of vscode.window.tabGroups.all) {
+    for (const tab of group.tabs) {
+      const uri = flowUriFromTab(tab);
+      if (uri && !seen.has(uri.fsPath)) {
+        seen.add(uri.fsPath);
+        openFlows.push(uri);
+      }
+    }
+  }
+  if (openFlows.length === 1) {
+    return vscode.workspace.openTextDocument(openFlows[0]);
+  }
+  if (openFlows.length > 1) {
+    const picked = await vscode.window.showQuickPick(
+      openFlows.map((uri) => ({ label: vscode.workspace.asRelativePath(uri), uri })),
+      { placeHolder: 'Which flow should recorded steps be appended to?' }
+    );
+    return picked ? vscode.workspace.openTextDocument(picked.uri) : undefined;
   }
   return undefined;
 }
@@ -34,8 +68,14 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('flowRecorder.startAndroidMirror', async () => {
       const document = await getActiveFlowDocument();
       if (!document) {
+        // A mirror already recording into a flow stays valid even when no flow tab is
+        // focused - just bring it back rather than reporting a missing flow.
+        if (AndroidMirrorPanel.current) {
+          AndroidMirrorPanel.current.reveal();
+          return;
+        }
         vscode.window.showErrorMessage(
-          'Open a .flow.yaml file first - recorded taps are appended to whichever flow is currently active.'
+          'No .flow.yaml is open. Open the flow you want to record into (any tab group), then run this command again.'
         );
         return;
       }

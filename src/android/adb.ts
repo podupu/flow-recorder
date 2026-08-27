@@ -1,5 +1,11 @@
 import { execFile } from 'child_process';
 import { ERASE_MAX } from '../gestures';
+import {
+  classifyDumpFailure,
+  looksLikeHierarchyXml,
+  parseAccessibilityServices,
+  HierarchyUnavailableError
+} from './hierarchy';
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -50,6 +56,22 @@ function execAdb(args: string[]): Promise<Buffer> {
         resolve(stdout as unknown as Buffer);
       }
     );
+  });
+}
+
+/**
+ * Like execAdb but never rejects on a non-zero exit - it hands back stdout/stderr so the
+ * caller can inspect them. `adb shell` reports the *adb* exit status, not the remote
+ * command's, so remote failures have to be detected from the output itself.
+ */
+function execAdbRaw(args: string[]): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    execFile('adb', args, { maxBuffer: 1024 * 1024 * 50, encoding: 'buffer' }, (_err, stdout, stderr) => {
+      resolve({
+        stdout: stdout ? stdout.toString('utf8') : '',
+        stderr: stderr ? stderr.toString('utf8') : ''
+      });
+    });
   });
 }
 
@@ -117,12 +139,66 @@ export async function getScreenSize(deviceId: string): Promise<{ width: number; 
   return { width: parseInt(match[1], 10), height: parseInt(match[2], 10) };
 }
 
-/** Dumps the current UI Automator accessibility-tree XML and returns it as a string. */
+/**
+ * /data/local/tmp is owned by the adb shell user, so it needs no storage permission and is
+ * unaffected by scoped storage - unlike /sdcard, which is a symlink into managed storage.
+ */
+const REMOTE_DUMP_PATH = '/data/local/tmp/flow-recorder-dump.xml';
+
+/** Packages whose accessibility services are currently enabled, for diagnosing dump conflicts. */
+export async function getEnabledAccessibilityServices(deviceId: string): Promise<string[]> {
+  try {
+    const out = await execAdb([
+      '-s',
+      deviceId,
+      'shell',
+      'settings',
+      'get',
+      'secure',
+      'enabled_accessibility_services'
+    ]);
+    return parseAccessibilityServices(out.toString('utf8'));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Dumps the current UI Automator accessibility-tree XML.
+ *
+ * Throws HierarchyUnavailableError - rather than returning unusable text - when the dump
+ * fails. The legacy `uiautomator` command connects to UiAutomation without
+ * FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES, so any enabled accessibility service holds the
+ * single available slot and this process is SIGKILLed. That used to surface as an empty
+ * element list, i.e. hover and outlines silently doing nothing.
+ */
 export async function dumpUiHierarchy(deviceId: string): Promise<string> {
-  const remotePath = '/sdcard/flow-recorder-dump.xml';
-  await execAdb(['-s', deviceId, 'shell', 'uiautomator', 'dump', remotePath]);
-  const out = await execAdb(['-s', deviceId, 'exec-out', 'cat', remotePath]);
-  return out.toString('utf8');
+  // Fold stderr into stdout and append the remote exit code: `adb shell` reports adb's own
+  // status, so a SIGKILLed uiautomator is otherwise indistinguishable from success.
+  const dump = await execAdbRaw([
+    '-s',
+    deviceId,
+    'shell',
+    `uiautomator dump ${REMOTE_DUMP_PATH} 2>&1; echo "__RC=$?"`
+  ]);
+  const dumpText = `${dump.stdout}${dump.stderr}`;
+  const rcMatch = dumpText.match(/__RC=(\d+)/);
+  const rc = rcMatch ? parseInt(rcMatch[1], 10) : 0;
+
+  const dumpFailure = classifyDumpFailure(dumpText, rc);
+  if (dumpFailure) {
+    throw new HierarchyUnavailableError(dumpFailure, await getEnabledAccessibilityServices(deviceId));
+  }
+
+  // `adb exec-out cat` on a missing file writes its error to STDOUT and still exits 0,
+  // so the payload must be validated rather than trusted.
+  const out = await execAdb(['-s', deviceId, 'exec-out', 'cat', REMOTE_DUMP_PATH]);
+  const xml = out.toString('utf8');
+  if (!looksLikeHierarchyXml(xml)) {
+    const reason = classifyDumpFailure(xml, 0) || 'unknown';
+    throw new HierarchyUnavailableError(reason, await getEnabledAccessibilityServices(deviceId));
+  }
+  return xml;
 }
 
 export async function longPress(deviceId: string, x: number, y: number): Promise<void> {
@@ -154,6 +230,14 @@ export async function pressKey(deviceId: string, key: string): Promise<void> {
 
 export async function back(deviceId: string): Promise<void> {
   await pressKey(deviceId, 'back');
+}
+
+/**
+ * Injects a raw Android keycode. Used by the device nav bar for keys that have no Maestro
+ * name - notably APP_SWITCH (187), which drives Recents but is not a recordable command.
+ */
+export async function pressKeycode(deviceId: string, keycode: number): Promise<void> {
+  await execAdb(['-s', deviceId, 'shell', 'input', 'keyevent', String(keycode)]);
 }
 
 export async function hideKeyboard(deviceId: string): Promise<void> {

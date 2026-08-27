@@ -1,13 +1,123 @@
-appId: com.example.app
+appId: com.conneqthealth.conneqt
 ---
-- tapOn: "Login"
-- takeScreenshot: assets/step1.png
-- apiRequest:
-    method: POST
-    url: https://api.example.com/session
-    body: '{"user":"demo"}'
-  response:
-    status: 200
-    durationMs: 142
-    body: '{"token":"abc123"}'
-- assertVisible: "Welcome"
+- assertVisible:
+      text: Create Your Account
+- assertVisible:
+      text: Please start by entering your basic profile information.
+- tapOn:
+      id: com.conneqthealth.conneqt:id/text_input_layout_first_name
+- inputText: username
+- tapOn:
+      id: com.conneqthealth.conneqt:id/text_input_layout_last_name
+- inputText: lastname
+- tapOn:
+      id: com.conneqthealth.conneqt:id/text_input_layout_nickname
+- inputText: avi090@mailinator.com
+- tapOn:
+      id: com.conneqthealth.conneqt:id/text_input_layout_email
+- eraseText: 50
+- tapOn:
+      id: com.conneqthealth.conneqt:id/text_input_layout_email
+- inputText: avi090@mailinator.com
+- swipe:
+      direction: UP
+- tapOn:
+      id: com.conneqthealth.conneqt:id/text_input_layout_password
+- inputText: Test@1234
+- tapOn:
+      id: com.conneqthealth.conneqt:id/text_input_layout_confirm_password
+- inputText: Test@1234
+- back
+- tapOn:
+      id: com.conneqthealth.conneqt:id/checkbox_terms_and_conditions
+- tapOn:
+      id: com.conneqthealth.conneqt:id/button_next
+- tapOn:
+      text: Male
+- tapOn:
+      text: Next
+- swipe:
+      direction: UP
+- tapOn:
+      text: Next
+- swipe:
+      direction: UP
+- tapOn:
+      text: Back
+- swipe:
+      direction: UP
+- tapOn:
+      text: Next
+- swipe:
+      direction: UP
+- tapOn:
+      text: Back
+- swipe:
+      direction: UP
+- tapOn:
+      text: Next
+- tapOn:
+      id: com.conneqthealth.conneqt:id/layout_controls_container
+- swipe:
+      direction: UP
+- tapOn:
+      text: Next
+- swipe:
+      direction: UP
+- tapOn:
+      text: Next
+- assertVisible:
+      text: Mocked name
+- assertVisible:
+      text: >-
+          To identify your Pulse, refer to the last 4 characters of the MAC address
+          found on the back of the device.
+- tapOn:
+      id: com.conneqthealth.conneqt:id/card_view_password
+- assertVisible:
+      text: Device Paired
+- tapOn:
+      text: Done
+- assertVisible:
+      text: Start strong. Enjoy 30 days of Care+!
+- assertVisible:
+      text: Access to Unlimited On-Demand Assessments
+- assertVisible:
+      text: >-
+          Take a few measurements and instantly receive a clear, easy-to-read
+          summary of your current cardiovascular status.
+- assertVisible:
+      text: >-
+          Disclaimer: Once your 30-day trial ends, you'll need to upgrade your plan
+          to continue accessing these features. Terms of Use &amp; Privacy Policy
+- tapOn:
+      text: >-
+          Disclaimer: Once your 30-day trial ends, you'll need to upgrade your plan
+          to continue accessing these features. Terms of Use &amp; Privacy Policy
+- swipe:
+      direction: LEFT
+- assertVisible:
+      text: Start strong. Enjoy 30 days of Care+!
+- assertVisible:
+      text: Receive Monthly Cardiology Reports
+- assertVisible:
+      text: >-
+          Every month, receive a comprehensive report summarizing your readings —
+          giving you a clear picture of your trends and overall heart health
+          progress.
+- assertVisible:
+      text: Begin Your Journey
+- tapOn:
+      text: Begin Your Journey
+- assertVisible:
+      text: Track What Matters
+- assertVisible:
+      text: Establishing Your Baseline
+- assertVisible:
+      text: >-
+          Take a few readings to establish your baseline and unlock your first
+          cardiology report. This will take around 20 minutes.
+- assertVisible:
+      text: Remind Me Later
+- tapOn:
+      text: Remind Me Later

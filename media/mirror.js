@@ -4,7 +4,6 @@
   const ctx = canvas.getContext('2d');
   const status = document.getElementById('status');
   const overlay = document.getElementById('overlay');
-  const tooltip = document.getElementById('tooltip');
   const img = new Image();
   let frameLoaded = false;
   let elements = [];
@@ -28,8 +27,29 @@
       renderOverlay();
     } else if (msg.type === 'status') {
       showStatus(msg.text);
+    } else if (msg.type === 'hierarchyError') {
+      showHierarchyProblem(msg.text);
+    } else if (msg.type === 'hierarchyOk') {
+      clearHierarchyProblem();
     }
   });
+
+  // Element detection failing used to look identical to "this screen has no elements".
+  // The banner keeps the real reason on screen until the dump succeeds again.
+  function showHierarchyProblem(text) {
+    const banner = document.getElementById('hierarchy-banner');
+    if (!banner) return;
+    banner.textContent = text;
+    banner.classList.remove('hidden');
+    elements = [];
+    updateHover(null);
+    renderOverlay();
+  }
+
+  function clearHierarchyProblem() {
+    const banner = document.getElementById('hierarchy-banner');
+    if (banner) banner.classList.add('hidden');
+  }
 
   function rect() {
     return canvas.getBoundingClientRect();
@@ -57,25 +77,6 @@
       best = elements[best.parentId];
     }
     return best;
-  }
-
-  function elementsAt(xPct, yPct) {
-    const seen = new Set();
-    const hits = [];
-    for (const e of elements) {
-      if (xPct >= e.left && xPct <= e.left + e.width && yPct >= e.top && yPct <= e.top + e.height) {
-        let node = e;
-        while (node && !isLabeled(node) && node.parentId >= 0 && elements[node.parentId]) {
-          node = elements[node.parentId];
-        }
-        if (node && isLabeled(node) && !seen.has(node.elementId)) {
-          seen.add(node.elementId);
-          hits.push(node);
-        }
-      }
-    }
-    hits.sort((a, b) => (a.width * a.height) - (b.width * b.height));
-    return hits;
   }
 
   function renderOverlay() {
@@ -121,61 +122,6 @@
     for (const el of overlay.children) {
       el.classList.toggle('hover', el.dataset.id === String(e && e.elementId));
     }
-    if (e) {
-      renderTooltip(e);
-      tooltip.classList.add('show');
-    } else {
-      tooltip.classList.remove('show');
-    }
-  }
-
-  function tooltipRow(label, value) {
-    const row = document.createElement('div');
-    row.className = 'tooltip-row';
-    const lbl = document.createElement('span');
-    lbl.className = 'tooltip-label';
-    lbl.textContent = label + ':';
-    row.appendChild(lbl);
-    const val = document.createElement('span');
-    val.className = 'tooltip-value';
-    val.textContent = value;
-    row.appendChild(val);
-    return row;
-  }
-
-  function renderTooltip(e) {
-    const stack = document.getElementById('overlap-stack');
-    tooltip.innerHTML = '';
-    const title = document.createElement('div');
-    title.className = 'tooltip-title';
-    title.textContent = elementLabel(e);
-    tooltip.appendChild(title);
-    if (e.text) tooltip.appendChild(tooltipRow('text', e.text));
-    if (e.resourceId) tooltip.appendChild(tooltipRow('id', e.resourceId));
-    if (e.contentDesc) tooltip.appendChild(tooltipRow('content-desc', e.contentDesc));
-    if (e.className) tooltip.appendChild(tooltipRow('class', e.className));
-    const pctW = Math.round(e.width * 100);
-    const pctH = Math.round(e.height * 100);
-    tooltip.appendChild(tooltipRow('bounds', e.left * 100 + '%,' + e.top * 100 + '% ' + pctW + 'x' + pctH));
-    if (stack) tooltip.appendChild(stack);
-  }
-
-  function renderOverlapStack(hits) {
-    const stack = document.getElementById('overlap-stack');
-    stack.innerHTML = '';
-    if (!hits || hits.length < 2) {
-      stack.classList.remove('show');
-      return;
-    }
-    for (const e of hits) {
-      const chip = document.createElement('span');
-      chip.className = 'overlap-chip' + (hoveredElement && hoveredElement.elementId === e.elementId ? ' active' : '');
-      chip.textContent = elementLabel(e);
-      chip.addEventListener('mouseenter', () => updateHover(e));
-      chip.addEventListener('click', () => vscode.postMessage({ type: 'elementTap', elementId: e.elementId }));
-      stack.appendChild(chip);
-    }
-    stack.classList.add('show');
   }
 
   let gesture = null;
@@ -200,9 +146,9 @@
       }
       gesture.last = p;
     }
-    const hits = elementsAt(p.xPct, p.yPct);
-    updateHover(hits[0] || null);
-    renderOverlapStack(hits);
+    // Smallest labeled element under the cursor wins, like Maestro Studio. The outline plus
+    // its badge is the whole hover affordance - no detail panel over the mirror.
+    updateHover(elementAt(p.xPct, p.yPct));
   });
 
   canvas.addEventListener('pointercancel', () => {
@@ -268,6 +214,18 @@
     dot.style.top = r.top + p.yPct * r.height + 'px';
     document.body.appendChild(dot);
     setTimeout(() => dot.remove(), 300);
+  }
+
+  // --- Android nav bar ---
+  // Reload is handled entirely by the panel (re-poll frame + hierarchy); the rest inject a
+  // keycode and, for Back/Home only, append a Maestro step.
+  const deviceNav = document.getElementById('device-nav');
+  if (deviceNav) {
+    deviceNav.addEventListener('click', (e) => {
+      const button = e.target.closest('button[data-nav]');
+      if (!button) return;
+      vscode.postMessage({ type: 'nav', action: button.dataset.nav });
+    });
   }
 
   // --- Right-click context menu ---
@@ -394,12 +352,32 @@
     optionalBox.addEventListener('change', () => post({ type: 'optional', value: optionalBox.checked }));
   }
 
+  /**
+   * Places the menu at the cursor, then keeps it inside the viewport. Right-clicking near
+   * the right or bottom edge used to push the menu off-screen, where it was unreachable.
+   * The menu must be un-hidden before measuring: display:none reports a zero-size rect.
+   */
   function showMenu(x, y) {
     buildMenu();
-    contextMenu.style.left = x + 'px';
-    contextMenu.style.top = y + 'px';
     contextMenu.classList.remove('hidden');
     contextMenu.classList.add('show');
+    contextMenu.style.left = '0px';
+    contextMenu.style.top = '0px';
+
+    const menu = contextMenu.getBoundingClientRect();
+    const margin = 8;
+    const maxLeft = window.innerWidth - menu.width - margin;
+    const maxTop = window.innerHeight - menu.height - margin;
+
+    // Prefer flipping to the left of the cursor when it would overflow; clamp as a backstop
+    // so the menu stays on screen even when it is wider or taller than the panel.
+    let left = x;
+    if (x > maxLeft) left = Math.max(margin, x - menu.width);
+    let top = y;
+    if (y > maxTop) top = Math.max(margin, y - menu.height);
+
+    contextMenu.style.left = Math.max(margin, Math.min(left, Math.max(margin, maxLeft))) + 'px';
+    contextMenu.style.top = Math.max(margin, Math.min(top, Math.max(margin, maxTop))) + 'px';
   }
 
   function hideMenu() {

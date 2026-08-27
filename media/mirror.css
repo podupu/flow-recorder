@@ -13,6 +13,22 @@ body {
   opacity: 0.7;
 }
 
+/* Stays visible for as long as element detection is broken, so it can never fail silently. */
+#hierarchy-banner {
+  margin: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  border-radius: 4px;
+  border: 1px solid var(--vscode-inputValidation-warningBorder, #c9a227);
+  background: var(--vscode-inputValidation-warningBackground, #4d3b00);
+  color: var(--vscode-foreground);
+}
+
+#hierarchy-banner.hidden {
+  display: none;
+}
+
 canvas {
   display: block;
   max-width: 100%;
@@ -71,77 +87,6 @@ canvas {
   background: rgba(56, 138, 221, 0.12);
 }
 
-#tooltip {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  display: none;
-  background: var(--vscode-editorWidget-background, #252526);
-  color: var(--vscode-foreground);
-  padding: 4px 8px;
-  font-size: 12px;
-  border-radius: 3px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-  max-width: 80%;
-  min-width: 160px;
-  word-break: break-all;
-  z-index: 10;
-}
-
-#tooltip.show {
-  display: block;
-}
-
-.tooltip-row {
-  display: flex;
-  gap: 8px;
-  font-size: 11px;
-}
-
-.tooltip-label {
-  color: var(--vscode-descriptionForeground, #bbb);
-}
-
-.tooltip-value {
-  word-break: break-all;
-}
-
-.tooltip-title {
-  font-weight: 600;
-  font-size: 12px;
-  margin-bottom: 3px;
-  word-break: break-all;
-}
-
-#overlap-stack {
-  display: none;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px solid rgba(128, 128, 128, 0.3);
-}
-
-#overlap-stack.show {
-  display: flex;
-}
-
-.overlap-chip {
-  font-size: 11px;
-  padding: 2px 6px;
-  border-radius: 8px;
-  border: 1px solid var(--vscode-editorWidget-border, #555);
-  cursor: pointer;
-  max-width: 160px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.overlap-chip.active {
-  background: var(--vscode-list-activeSelectionBackground, rgba(56, 138, 221, 0.35));
-}
-
 #selection {
   position: absolute;
   box-sizing: border-box;
@@ -173,12 +118,54 @@ canvas {
   border-radius: 3px 3px 0 0;
 }
 
+/* Android-style nav bar under the mirror. Sits outside #stage so it never overlaps the screen. */
+#device-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  margin: 8px auto 12px;
+  padding: 6px 14px;
+  width: fit-content;
+  max-width: 100%;
+  border-radius: 999px;
+  background: var(--vscode-editorWidget-background, #252526);
+  border: 1px solid var(--vscode-editorWidget-border, #444);
+}
+
+#device-nav button {
+  background: transparent;
+  color: var(--vscode-foreground);
+  border: none;
+  border-radius: 6px;
+  padding: 2px 10px;
+  font-size: 16px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+#device-nav button:hover {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.2));
+}
+
+#device-nav button:active {
+  background: var(--vscode-list-activeSelectionBackground, rgba(56, 138, 221, 0.35));
+}
+
+#device-nav .nav-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--vscode-editorWidget-border, #444);
+}
+
 #context-menu {
   position: fixed;
   z-index: 1000;
-  min-width: 200px;
-  max-width: 320px;
-  max-height: 70vh;
+  min-width: 0;
+  /* Never wider/taller than the panel, so a narrow mirror pane can still show the whole menu. */
+  width: max-content;
+  max-width: min(320px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
   overflow-y: auto;
   background: var(--vscode-editorWidget-background, #252526);
   color: var(--vscode-foreground);
