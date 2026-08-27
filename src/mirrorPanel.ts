@@ -584,6 +584,10 @@ export class AndroidMirrorPanel {
       <input id="screenshotName" type="text" placeholder="screenshot-name" />
       <button id="doScreenshot">Screenshot</button>
     </div>
+    <div class="row">
+      <input id="clipboardText" type="text" placeholder="Clipboard text..." />
+      <button data-action="setClipboard">Set clipboard</button>
+    </div>
   </div>
   <div id="stage">
     <canvas id="screen"></canvas>

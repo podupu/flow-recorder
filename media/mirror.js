@@ -185,6 +185,14 @@
     document.getElementById('screenshotName').value = '';
   });
 
+  document.querySelector('[data-action="setClipboard"]').addEventListener('click', () => {
+    const input = document.getElementById('clipboardText');
+    const text = input.value;
+    if (!text) return;
+    vscode.postMessage({ type: 'setClipboard', text });
+    input.value = '';
+  });
+
   const launchClear = document.getElementById('launchClear');
 
   const singleActions = {
