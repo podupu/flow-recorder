@@ -1,4 +1,39 @@
 import { execFile } from 'child_process';
+import { ERASE_MAX } from '../gestures';
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function escapeInputText(text: string): string {
+  return text.replace(/ /g, '%s');
+}
+
+const KEYCODE_BY_NAME: Record<string, number> = {
+  home: 3,
+  back: 4,
+  enter: 66,
+  backspace: 67,
+  'volume up': 24,
+  'volume down': 25,
+  power: 26,
+  tab: 61,
+  lock: 26
+};
+
+export function keyNameToKeycode(key: string): number {
+  const code = KEYCODE_BY_NAME[key.toLowerCase()];
+  if (code === undefined) {
+    throw new Error(`Unsupported Maestro key: ${key}`);
+  }
+  return code;
+}
+
+export function orientationToSettings(orientation: string): string {
+  if (orientation === 'LANDSCAPE') return '1';
+  if (orientation === 'PORTRAIT') return '0';
+  throw new Error(`Unsupported orientation: ${orientation}`);
+}
 
 function execAdb(args: string[]): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -88,4 +123,93 @@ export async function dumpUiHierarchy(deviceId: string): Promise<string> {
   await execAdb(['-s', deviceId, 'shell', 'uiautomator', 'dump', remotePath]);
   const out = await execAdb(['-s', deviceId, 'exec-out', 'cat', remotePath]);
   return out.toString('utf8');
+}
+
+export async function longPress(deviceId: string, x: number, y: number): Promise<void> {
+  const rx = String(Math.round(x));
+  const ry = String(Math.round(y));
+  await execAdb(['-s', deviceId, 'shell', 'input', 'swipe', rx, ry, rx, ry, '600']);
+}
+
+export async function doubleTap(deviceId: string, x: number, y: number): Promise<void> {
+  await tap(deviceId, x, y);
+  await delay(100);
+  await tap(deviceId, x, y);
+}
+
+export async function inputText(deviceId: string, text: string): Promise<void> {
+  await execAdb(['-s', deviceId, 'shell', 'input', 'text', escapeInputText(text)]);
+}
+
+export async function eraseText(deviceId: string, count: number): Promise<void> {
+  const n = Math.min(Math.max(1, count), ERASE_MAX);
+  for (let i = 0; i < n; i++) {
+    await execAdb(['-s', deviceId, 'shell', 'input', 'keyevent', '67']);
+  }
+}
+
+export async function pressKey(deviceId: string, key: string): Promise<void> {
+  await execAdb(['-s', deviceId, 'shell', 'input', 'keyevent', String(keyNameToKeycode(key))]);
+}
+
+export async function back(deviceId: string): Promise<void> {
+  await pressKey(deviceId, 'back');
+}
+
+export async function hideKeyboard(deviceId: string): Promise<void> {
+  await pressKey(deviceId, 'back');
+}
+
+export async function pasteText(deviceId: string): Promise<void> {
+  await execAdb(['-s', deviceId, 'shell', 'input', 'keyevent', '279']);
+}
+
+export async function launchApp(deviceId: string, appId: string): Promise<void> {
+  await execAdb(['-s', deviceId, 'shell', 'monkey', '-p', appId, '-c', 'android.intent.category.LAUNCHER', '1']);
+}
+
+export async function stopApp(deviceId: string, appId: string): Promise<void> {
+  await execAdb(['-s', deviceId, 'shell', 'am', 'force-stop', appId]);
+}
+
+export async function killApp(deviceId: string, appId: string, shouldClearState: boolean): Promise<void> {
+  await stopApp(deviceId, appId);
+  if (shouldClearState) {
+    await clearState(deviceId, appId);
+  }
+}
+
+export async function clearState(deviceId: string, appId: string): Promise<void> {
+  await execAdb(['-s', deviceId, 'shell', 'pm', 'clear', appId]);
+}
+
+export async function setOrientation(deviceId: string, orientation: string): Promise<void> {
+  const rotation = orientationToSettings(orientation);
+  await execAdb(['-s', deviceId, 'shell', 'settings', 'put', 'system', 'accelerometer_rotation', '0']);
+  await execAdb(['-s', deviceId, 'shell', 'settings', 'put', 'system', 'user_rotation', rotation]);
+}
+
+export async function setClipboard(deviceId: string, text: string): Promise<void> {
+  try {
+    await execAdb(['-s', deviceId, 'shell', 'cmd', 'clipboard', 'set-text', text]);
+  } catch {
+    // Best-effort: not every device exposes a writable clipboard service.
+  }
+}
+
+export async function setAirplaneMode(deviceId: string, enabled: boolean): Promise<void> {
+  await execAdb(['-s', deviceId, 'shell', 'settings', 'put', 'global', 'airplane_mode_on', enabled ? '1' : '0']);
+  await execAdb(['-s', deviceId, 'shell', 'am', 'broadcast', '-a', 'android.intent.action.AIRPLANE_MODE']);
+}
+
+export async function setDarkMode(deviceId: string, enabled: boolean): Promise<void> {
+  await execAdb(['-s', deviceId, 'shell', 'cmd', 'uimode', 'night', enabled ? 'yes' : 'no']);
+}
+
+export async function scroll(deviceId: string): Promise<void> {
+  const size = await getScreenSize(deviceId);
+  const x = Math.round(size.width / 2);
+  const yFrom = Math.round(size.height * 0.8);
+  const yTo = Math.round(size.height * 0.2);
+  await execAdb(['-s', deviceId, 'shell', 'input', 'swipe', String(x), String(yFrom), String(x), String(yTo), '300']);
 }
