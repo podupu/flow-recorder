@@ -128,6 +128,7 @@ export class AndroidMirrorPanel {
           text: n.text,
           resourceId: n.resourceId,
           contentDesc: n.contentDesc,
+          className: n.className,
           left: n.bounds.left / screen.width,
           top: n.bounds.top / screen.height,
           width: (n.bounds.right - n.bounds.left) / screen.width,
@@ -608,10 +609,21 @@ export class AndroidMirrorPanel {
       <button data-action="setClipboard">Set clipboard</button>
     </div>
   </div>
-  <div id="stage">
-    <canvas id="screen"></canvas>
-    <div id="overlay"></div>
-    <div id="tooltip"></div>
+  <div id="mirror-body">
+    <div id="stage">
+      <canvas id="screen"></canvas>
+      <div id="overlay"></div>
+      <div id="tooltip">
+        <div id="overlap-stack"></div>
+      </div>
+    </div>
+    <div id="elements-panel">
+      <div class="panel-header">
+        <span>Elements</span>
+        <button id="toggle-elements" title="Show/hide list">-</button>
+      </div>
+      <div id="elements-list"></div>
+    </div>
   </div>
   <script src="${scriptUri}"></script>
 </body>

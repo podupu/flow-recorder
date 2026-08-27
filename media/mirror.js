@@ -26,6 +26,7 @@
     } else if (msg.type === 'elements') {
       elements = msg.nodes || [];
       renderOverlay();
+      renderElementList();
     } else if (msg.type === 'status') {
       showStatus(msg.text);
     }
@@ -52,6 +53,17 @@
     return best;
   }
 
+  function elementsAt(xPct, yPct) {
+    const hits = [];
+    for (const e of elements) {
+      if (xPct >= e.left && xPct <= e.left + e.width && yPct >= e.top && yPct <= e.top + e.height) {
+        hits.push(e);
+      }
+    }
+    hits.sort((a, b) => (a.width * a.height) - (b.width * b.height));
+    return hits;
+  }
+
   function renderOverlay() {
     overlay.innerHTML = '';
     for (const e of elements) {
@@ -73,8 +85,38 @@
     setTimeout(() => { status.style.display = 'none'; }, 2000);
   }
 
-  function selectorLabel(e) {
-    return e.selector ? JSON.stringify(e.selector) : e.text || e.resourceId || e.contentDesc || '';
+  function elementLabel(e) {
+    return e.text || e.resourceId || e.contentDesc || '(unnamed)';
+  }
+
+  function elementIdSuffix(e) {
+    if (e.text && e.resourceId) return e.resourceId;
+    return '';
+  }
+
+  function renderElementList() {
+    const list = document.getElementById('elements-list');
+    list.innerHTML = '';
+    for (const e of elements) {
+      const row = document.createElement('div');
+      row.className = 'element-row';
+      row.dataset.id = e.elementId;
+      const label = document.createElement('span');
+      label.className = 'element-label';
+      label.textContent = elementLabel(e);
+      row.appendChild(label);
+      const suffix = elementIdSuffix(e);
+      if (suffix) {
+        const idSpan = document.createElement('span');
+        idSpan.className = 'element-id';
+        idSpan.textContent = suffix;
+        row.appendChild(idSpan);
+      }
+      row.addEventListener('mouseenter', () => updateHover(e));
+      row.addEventListener('click', () => vscode.postMessage({ type: 'elementTap', elementId: e.elementId }));
+      list.appendChild(row);
+    }
+    if (hoveredElement) updateHover(hoveredElement);
   }
 
   function updateHover(e) {
@@ -82,12 +124,64 @@
     for (const el of overlay.children) {
       el.classList.toggle('hover', el.dataset.id === String(e && e.elementId));
     }
+    for (const row of document.querySelectorAll('.element-row')) {
+      row.classList.toggle('active', row.dataset.id === String(e && e.elementId));
+    }
     if (e) {
-      tooltip.textContent = selectorLabel(e);
+      renderTooltip(e);
       tooltip.classList.add('show');
     } else {
       tooltip.classList.remove('show');
     }
+  }
+
+  function tooltipRow(label, value) {
+    const row = document.createElement('div');
+    row.className = 'tooltip-row';
+    const lbl = document.createElement('span');
+    lbl.className = 'tooltip-label';
+    lbl.textContent = label + ':';
+    row.appendChild(lbl);
+    const val = document.createElement('span');
+    val.className = 'tooltip-value';
+    val.textContent = value;
+    row.appendChild(val);
+    return row;
+  }
+
+  function renderTooltip(e) {
+    tooltip.innerHTML = '';
+    const title = document.createElement('div');
+    title.className = 'tooltip-title';
+    title.textContent = elementLabel(e);
+    tooltip.appendChild(title);
+    if (e.text) tooltip.appendChild(tooltipRow('text', e.text));
+    if (e.resourceId) tooltip.appendChild(tooltipRow('id', e.resourceId));
+    if (e.contentDesc) tooltip.appendChild(tooltipRow('content-desc', e.contentDesc));
+    if (e.className) tooltip.appendChild(tooltipRow('class', e.className));
+    const pctW = Math.round(e.width * 100);
+    const pctH = Math.round(e.height * 100);
+    tooltip.appendChild(tooltipRow('bounds', e.left * 100 + '%,' + e.top * 100 + '% ' + pctW + 'x' + pctH));
+    const stack = document.getElementById('overlap-stack');
+    if (stack) tooltip.appendChild(stack);
+  }
+
+  function renderOverlapStack(hits) {
+    const stack = document.getElementById('overlap-stack');
+    stack.innerHTML = '';
+    if (!hits || hits.length < 2) {
+      stack.classList.remove('show');
+      return;
+    }
+    for (const e of hits) {
+      const chip = document.createElement('span');
+      chip.className = 'overlap-chip' + (hoveredElement && hoveredElement.elementId === e.elementId ? ' active' : '');
+      chip.textContent = elementLabel(e);
+      chip.addEventListener('mouseenter', () => updateHover(e));
+      chip.addEventListener('click', () => vscode.postMessage({ type: 'elementTap', elementId: e.elementId }));
+      stack.appendChild(chip);
+    }
+    stack.classList.add('show');
   }
 
   let gesture = null;
@@ -111,7 +205,9 @@
       }
       gesture.last = p;
     }
-    updateHover(elementAt(p.xPct, p.yPct));
+    const hits = elementsAt(p.xPct, p.yPct);
+    updateHover(hits[0] || null);
+    renderOverlapStack(hits);
   });
 
   canvas.addEventListener('pointercancel', () => {
@@ -250,5 +346,12 @@
         vscode.postMessage({ type: 'launchApp', clearState: launchClear.checked });
       }
     });
+  });
+
+  const toggleElements = document.getElementById('toggle-elements');
+  const elementsPanel = document.getElementById('elements-panel');
+  toggleElements.addEventListener('click', () => {
+    const collapsed = elementsPanel.classList.toggle('collapsed');
+    toggleElements.textContent = collapsed ? '+' : '-';
   });
 })();
