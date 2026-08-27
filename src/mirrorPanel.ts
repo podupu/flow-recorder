@@ -565,50 +565,6 @@ export class AndroidMirrorPanel {
 </head>
 <body>
   <div id="status">Connecting to device...</div>
-  <div id="mirror-toolbar">
-    <div class="row">
-      <button data-action="tap">Tap</button>
-      <button data-action="longPress">Long press</button>
-      <button data-action="doubleTap">Double tap</button>
-      <button data-action="assertVisible">Assert visible</button>
-      <button data-action="assertNotVisible">Assert not visible</button>
-    </div>
-    <div class="row">
-      <input id="inputText" type="text" placeholder="Text to type..." />
-      <button id="doInput">Input</button>
-      <input id="eraseCount" type="number" value="50" min="1" max="100" />
-      <button id="doErase">Erase</button>
-      <button data-action="pressKey" data-key="back">Back key</button>
-      <button data-action="back">Back</button>
-      <button data-action="pressKey" data-key="home">Home</button>
-      <button data-action="pressKey" data-key="enter">Enter</button>
-      <button data-action="hideKeyboard">Hide KB</button>
-    </div>
-    <div class="row">
-      <button data-action="setOrientation" data-orientation="LANDSCAPE">Landscape</button>
-      <button data-action="setOrientation" data-orientation="PORTRAIT">Portrait</button>
-      <button data-action="scroll">Scroll</button>
-      <button data-action="pasteText">Paste</button>
-      <label class="opt"><input id="optional" type="checkbox" /> optional</label>
-    </div>
-    <div class="row">
-      <label class="opt">Clear state <input id="launchClear" type="checkbox" /></label>
-      <button data-action="launchApp">Launch app</button>
-      <button data-action="stopApp">Stop</button>
-      <button data-action="killApp">Kill</button>
-      <button data-action="clearState">Clear state</button>
-      <button data-action="toggleDarkMode">Dark mode</button>
-      <button data-action="toggleAirplaneMode">Airplane</button>
-    </div>
-    <div class="row">
-      <input id="screenshotName" type="text" placeholder="screenshot-name" />
-      <button id="doScreenshot">Screenshot</button>
-    </div>
-    <div class="row">
-      <input id="clipboardText" type="text" placeholder="Clipboard text..." />
-      <button data-action="setClipboard">Set clipboard</button>
-    </div>
-  </div>
   <div id="mirror-body">
     <div id="stage">
       <canvas id="screen"></canvas>
@@ -625,6 +581,7 @@ export class AndroidMirrorPanel {
       <div id="elements-list"></div>
     </div>
   </div>
+  <div id="context-menu" class="hidden"></div>
   <script src="${scriptUri}"></script>
 </body>
 </html>`;

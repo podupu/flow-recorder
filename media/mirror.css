@@ -92,51 +92,6 @@ canvas {
   display: block;
 }
 
-#mirror-toolbar {
-  padding: 6px 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  border-bottom: 1px solid var(--vscode-panel-border, #444);
-}
-
-#mirror-toolbar .row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-}
-
-#mirror-toolbar input[type="text"],
-#mirror-toolbar input[type="number"] {
-  background: var(--vscode-input-background, #3c3c3c);
-  color: var(--vscode-input-foreground);
-  border: 1px solid var(--vscode-input-border, #444);
-  padding: 3px 6px;
-  font-size: 12px;
-  width: auto;
-}
-
-#mirror-toolbar input#inputText {
-  width: 160px;
-}
-
-#mirror-toolbar input#eraseCount {
-  width: 56px;
-}
-
-#mirror-toolbar button {
-  font-size: 12px;
-  padding: 3px 8px;
-}
-
-#mirror-toolbar .opt {
-  font-size: 12px;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
 #mirror-body {
   display: flex;
   gap: 8px;
@@ -259,4 +214,94 @@ canvas {
 
 .overlap-chip.active {
   background: var(--vscode-list-activeSelectionBackground, rgba(56, 138, 221, 0.35));
+}
+
+.element-badge {
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  background: #388add;
+  color: #fff;
+  border-radius: 2px 0 6px 0;
+  z-index: 2;
+}
+
+#context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 200px;
+  max-width: 320px;
+  max-height: 70vh;
+  overflow-y: auto;
+  background: var(--vscode-editorWidget-background, #252526);
+  color: var(--vscode-foreground);
+  border: 1px solid var(--vscode-editorWidget-border, #444);
+  border-radius: 6px;
+  padding: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+#context-menu.hidden {
+  display: none;
+}
+
+.menu-target {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--vscode-editorWidget-border, #444);
+  word-break: break-all;
+}
+
+.menu-separator {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--vscode-descriptionForeground, #999);
+  padding: 6px 8px 2px;
+}
+
+.menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: var(--vscode-foreground);
+  border: none;
+  border-radius: 4px;
+  padding: 5px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.menu-item:hover {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.2));
+}
+
+.menu-item.menu-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+#context-menu input[type="text"],
+#context-menu input[type="number"] {
+  display: block;
+  width: calc(100% - 16px);
+  margin: 4px 8px;
+  background: var(--vscode-input-background, #3c3c3c);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border, #444);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 12px;
+  box-sizing: border-box;
 }

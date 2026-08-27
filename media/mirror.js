@@ -122,7 +122,21 @@
   function updateHover(e) {
     hoveredElement = e;
     for (const el of overlay.children) {
-      el.classList.toggle('hover', el.dataset.id === String(e && e.elementId));
+      const on = el.dataset.id === String(e && e.elementId);
+      el.classList.toggle('hover', on);
+      const badge = el.querySelector('.element-badge');
+      if (on && e) {
+        if (!badge) {
+          const b = document.createElement('span');
+          b.className = 'element-badge';
+          b.textContent = elementLabel(e);
+          el.appendChild(b);
+        } else {
+          badge.textContent = elementLabel(e);
+        }
+      } else if (badge) {
+        badge.remove();
+      }
     }
     for (const row of document.querySelectorAll('.element-row')) {
       row.classList.toggle('active', row.dataset.id === String(e && e.elementId));
@@ -275,83 +289,160 @@
     setTimeout(() => dot.remove(), 300);
   }
 
-  const optionalBox = document.getElementById('optional');
-  optionalBox.addEventListener('change', () => {
-    vscode.postMessage({ type: 'optional', value: optionalBox.checked });
-  });
-
-  const inputField = document.getElementById('inputText');
-  function doInput() {
-    const text = inputField.value;
-    if (!text) return;
-    vscode.postMessage({ type: 'inputText', text, elementId: hoveredElement && hoveredElement.elementId });
-    inputField.value = '';
-  }
-  document.getElementById('doInput').addEventListener('click', doInput);
-  inputField.addEventListener('keydown', (e) => { if (e.key === 'Enter') doInput(); });
-
-  document.getElementById('doErase').addEventListener('click', () => {
-    const count = parseInt(document.getElementById('eraseCount').value, 10) || 50;
-    vscode.postMessage({ type: 'eraseText', count });
-  });
-
-  document.getElementById('doScreenshot').addEventListener('click', () => {
-    const name = document.getElementById('screenshotName').value.trim();
-    vscode.postMessage({ type: 'takeScreenshot', name });
-    document.getElementById('screenshotName').value = '';
-  });
-
-  document.querySelector('[data-action="setClipboard"]').addEventListener('click', () => {
-    const input = document.getElementById('clipboardText');
-    const text = input.value;
-    if (!text) return;
-    vscode.postMessage({ type: 'setClipboard', text });
-    input.value = '';
-  });
-
-  const launchClear = document.getElementById('launchClear');
-
-  const singleActions = {
-    tap: () => {
-      if (hoveredElement) vscode.postMessage({ type: 'elementTap', elementId: hoveredElement.elementId });
-      else showStatus('Hover an element to tap it');
-    },
-    longPress: () => vscode.postMessage({ type: 'longPress', elementId: hoveredElement && hoveredElement.elementId }),
-    doubleTap: () => vscode.postMessage({ type: 'doubleTap', elementId: hoveredElement && hoveredElement.elementId }),
-    assertVisible: () => vscode.postMessage({ type: 'assertVisible', elementId: hoveredElement && hoveredElement.elementId }),
-    assertNotVisible: () => vscode.postMessage({ type: 'assertNotVisible', elementId: hoveredElement && hoveredElement.elementId }),
-    back: () => vscode.postMessage({ type: 'back' }),
-    hideKeyboard: () => vscode.postMessage({ type: 'hideKeyboard' }),
-    pasteText: () => vscode.postMessage({ type: 'pasteText' }),
-    scroll: () => vscode.postMessage({ type: 'scroll' }),
-    stopApp: () => vscode.postMessage({ type: 'stopApp' }),
-    killApp: () => vscode.postMessage({ type: 'killApp', clearState: launchClear.checked }),
-    clearState: () => vscode.postMessage({ type: 'clearState' }),
-    toggleDarkMode: () => vscode.postMessage({ type: 'toggleDarkMode' }),
-    toggleAirplaneMode: () => vscode.postMessage({ type: 'toggleAirplaneMode' })
-  };
-
-  document.querySelectorAll('[data-action]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const action = btn.dataset.action;
-      if (singleActions[action]) {
-        singleActions[action]();
-        return;
-      }
-      if (action === 'pressKey') {
-        vscode.postMessage({ type: 'pressKey', key: btn.dataset.key });
-      } else if (action === 'setOrientation') {
-        vscode.postMessage({ type: 'setOrientation', orientation: btn.dataset.orientation });
-      } else if (action === 'launchApp') {
-        vscode.postMessage({ type: 'launchApp', clearState: launchClear.checked });
-      }
-    });
-  });
-
   const toggleElements = document.getElementById('toggle-elements');
   const elementsPanel = document.getElementById('elements-panel');
   toggleElements.addEventListener('click', () => {
     const collapsed = elementsPanel.classList.toggle('collapsed');
     toggleElements.textContent = collapsed ? '+' : '-';
+  });
+
+  // --- Right-click context menu ---
+  const contextMenu = document.getElementById('context-menu');
+  let menuTarget = null;
+
+  function menuItem(label, onClick) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'menu-item';
+    item.textContent = label;
+    item.addEventListener('click', () => { hideMenu(); onClick(); });
+    return item;
+  }
+
+  function menuSeparator(text) {
+    const sep = document.createElement('div');
+    sep.className = 'menu-separator';
+    sep.textContent = text;
+    return sep;
+  }
+
+  function menuField(id, placeholder, type) {
+    const input = document.createElement('input');
+    input.type = type || 'text';
+    input.id = id;
+    input.placeholder = placeholder || '';
+    return input;
+  }
+
+  function post(msg) {
+    vscode.postMessage(msg);
+  }
+
+  function targetElement() {
+    return menuTarget;
+  }
+
+  function elementAction(action) {
+    const el = targetElement();
+    if (!el) {
+      showStatus('Right-click an element to use this action');
+      return;
+    }
+    post({ type: action, elementId: el.elementId });
+  }
+
+  function buildMenu() {
+    contextMenu.innerHTML = '';
+    const target = targetElement();
+    const targetRow = document.createElement('div');
+    targetRow.className = 'menu-target';
+    targetRow.textContent = target ? elementLabel(target) + (target.resourceId ? '  [' + target.resourceId + ']' : '') : 'Empty area — gestures only';
+    contextMenu.appendChild(targetRow);
+
+    contextMenu.appendChild(menuSeparator('Gestures'));
+    contextMenu.appendChild(menuItem('Tap', () => elementAction('elementTap')));
+    contextMenu.appendChild(menuItem('Long press', () => elementAction('longPress')));
+    contextMenu.appendChild(menuItem('Double tap', () => elementAction('doubleTap')));
+    contextMenu.appendChild(menuItem('Assert visible', () => elementAction('assertVisible')));
+    contextMenu.appendChild(menuItem('Assert not visible', () => elementAction('assertNotVisible')));
+
+    contextMenu.appendChild(menuSeparator('Text & keyboard'));
+    const inputTextField = menuField('menu-input', 'Text to type...');
+    contextMenu.appendChild(inputTextField);
+    contextMenu.appendChild(menuItem('Input text', () => {
+      const el = targetElement();
+      post({ type: 'inputText', text: inputTextField.value, elementId: el ? el.elementId : undefined });
+      inputTextField.value = '';
+    }));
+    const eraseField = menuField('menu-erase', 'Chars to erase', 'number');
+    eraseField.value = '50';
+    contextMenu.appendChild(eraseField);
+    contextMenu.appendChild(menuItem('Erase', () => {
+      post({ type: 'eraseText', count: parseInt(eraseField.value, 10) || 50 });
+    }));
+    contextMenu.appendChild(menuItem('Back', () => post({ type: 'back' })));
+    contextMenu.appendChild(menuItem('Back key', () => post({ type: 'pressKey', key: 'back' })));
+    contextMenu.appendChild(menuItem('Home', () => post({ type: 'pressKey', key: 'home' })));
+    contextMenu.appendChild(menuItem('Enter', () => post({ type: 'pressKey', key: 'enter' })));
+    contextMenu.appendChild(menuItem('Hide keyboard', () => post({ type: 'hideKeyboard' })));
+    contextMenu.appendChild(menuItem('Paste', () => post({ type: 'pasteText' })));
+
+    contextMenu.appendChild(menuSeparator('App'));
+    const launchClear = menuField('menu-launch-clear', '', 'checkbox');
+    const launchWrap = document.createElement('label');
+    launchWrap.className = 'menu-item menu-check';
+    launchWrap.appendChild(launchClear);
+    launchWrap.appendChild(document.createTextNode(' Clear state on launch'));
+    contextMenu.appendChild(launchWrap);
+    contextMenu.appendChild(menuItem('Launch app', () => post({ type: 'launchApp', clearState: launchClear.checked })));
+    contextMenu.appendChild(menuItem('Stop app', () => post({ type: 'stopApp' })));
+    contextMenu.appendChild(menuItem('Kill app', () => post({ type: 'killApp', clearState: launchClear.checked })));
+    contextMenu.appendChild(menuItem('Clear app state', () => post({ type: 'clearState' })));
+    contextMenu.appendChild(menuItem('Toggle dark mode', () => post({ type: 'toggleDarkMode' })));
+
+    contextMenu.appendChild(menuSeparator('Device'));
+    contextMenu.appendChild(menuItem('Landscape', () => post({ type: 'setOrientation', orientation: 'LANDSCAPE' })));
+    contextMenu.appendChild(menuItem('Portrait', () => post({ type: 'setOrientation', orientation: 'PORTRAIT' })));
+    contextMenu.appendChild(menuItem('Scroll', () => post({ type: 'scroll' })));
+    contextMenu.appendChild(menuItem('Toggle airplane mode', () => post({ type: 'toggleAirplaneMode' })));
+    const clipboardField = menuField('menu-clipboard', 'Clipboard text...');
+    contextMenu.appendChild(clipboardField);
+    contextMenu.appendChild(menuItem('Set clipboard', () => {
+      if (clipboardField.value) {
+        post({ type: 'setClipboard', text: clipboardField.value });
+        clipboardField.value = '';
+      }
+    }));
+
+    contextMenu.appendChild(menuSeparator('Capture'));
+    const shotField = menuField('menu-shot', 'screenshot-name');
+    contextMenu.appendChild(shotField);
+    contextMenu.appendChild(menuItem('Take screenshot', () => {
+      post({ type: 'takeScreenshot', name: shotField.value });
+      shotField.value = '';
+    }));
+    const optionalBox = menuField('menu-optional', '', 'checkbox');
+    const optWrap = document.createElement('label');
+    optWrap.className = 'menu-item menu-check';
+    optWrap.appendChild(optionalBox);
+    optWrap.appendChild(document.createTextNode(' Record steps as optional'));
+    contextMenu.appendChild(optWrap);
+    optionalBox.addEventListener('change', () => post({ type: 'optional', value: optionalBox.checked }));
+  }
+
+  function showMenu(x, y) {
+    buildMenu();
+    contextMenu.style.left = x + 'px';
+    contextMenu.style.top = y + 'px';
+    contextMenu.classList.remove('hidden');
+    contextMenu.classList.add('show');
+  }
+
+  function hideMenu() {
+    contextMenu.classList.add('hidden');
+    contextMenu.classList.remove('show');
+  }
+
+  canvas.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    const p = toPct(e.clientX, e.clientY);
+    const el = elementAt(p.xPct, p.yPct);
+    menuTarget = el;
+    updateHover(el);
+    showMenu(e.clientX, e.clientY);
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!contextMenu.contains(e.target)) hideMenu();
   });
 })();
