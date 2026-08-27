@@ -67,10 +67,57 @@ export function findSmallestNodeAtPoint(nodes: UiNode[], x: number, y: number): 
   return best;
 }
 
+export type ElementSelector = { text?: string; id?: string; point?: string };
+
+export function resolveElementSelector(
+  node: UiNode | undefined,
+  x: number,
+  y: number,
+  screen: { width: number; height: number }
+): ElementSelector {
+  if (node?.text) return { text: node.text };
+  if (node?.contentDesc) return { text: node.contentDesc };
+  if (node?.resourceId) return { id: node.resourceId };
+  const pct = `${Math.round((x / screen.width) * 100)}%,${Math.round((y / screen.height) * 100)}%`;
+  return { point: pct };
+}
+
+export function toMaestroStep(
+  command: string,
+  node: UiNode | undefined,
+  x: number,
+  y: number,
+  screen: { width: number; height: number }
+): any {
+  return { [command]: resolveElementSelector(node, x, y, screen) };
+}
+
+export interface SelectableUiNode extends UiNode {
+  elementId: number;
+}
+
+export function filterSelectableNodes(
+  nodes: UiNode[],
+  screen: { width: number; height: number }
+): SelectableUiNode[] {
+  const screenArea = screen.width * screen.height;
+  const result: SelectableUiNode[] = [];
+  for (const node of nodes) {
+    const { left, top, right, bottom } = node.bounds;
+    const w = right - left;
+    const h = bottom - top;
+    if (w <= 0 || h <= 0) continue;
+    if (w * h > screenArea * 0.9) continue;
+    const hasLabel = Boolean((node.text && node.text.trim()) || node.resourceId || node.contentDesc);
+    if (!hasLabel) continue;
+    result.push({ ...node, elementId: result.length });
+  }
+  return result;
+}
+
 /**
- * Prefers a human-readable, Maestro-style selector (text / content-desc / resource-id) so
- * recorded flows stay robust across layout/resolution changes. Falls back to a percentage-based
- * coordinate, which is still resolution-independent, if no identifying element was found.
+ * Delegating shim: kept so the compile gate stays green until the mirror panel switches over
+ * to `toMaestroStep` in a later task.
  */
 export function toMaestroSelector(
   node: UiNode | undefined,
@@ -78,9 +125,5 @@ export function toMaestroSelector(
   y: number,
   screen: { width: number; height: number }
 ): any {
-  if (node?.text) return { tapOn: { text: node.text } };
-  if (node?.contentDesc) return { tapOn: { text: node.contentDesc } };
-  if (node?.resourceId) return { tapOn: { id: node.resourceId } };
-  const pct = `${Math.round((x / screen.width) * 100)}%,${Math.round((y / screen.height) * 100)}%`;
-  return { tapOn: { point: pct } };
+  return { tapOn: resolveElementSelector(node, x, y, screen) };
 }
