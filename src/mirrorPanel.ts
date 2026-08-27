@@ -571,6 +571,9 @@ export class AndroidMirrorPanel {
     <div id="stage">
       <canvas id="screen"></canvas>
       <div id="overlay"></div>
+      <div id="selection">
+        <span id="selection-badge"></span>
+      </div>
       <div id="tooltip">
         <div id="overlap-stack"></div>
       </div>

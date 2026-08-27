@@ -106,22 +106,20 @@
 
   function updateHover(e) {
     hoveredElement = e;
+    const selection = document.getElementById('selection');
+    const badge = document.getElementById('selection-badge');
+    if (e) {
+      selection.style.left = e.left * 100 + '%';
+      selection.style.top = e.top * 100 + '%';
+      selection.style.width = e.width * 100 + '%';
+      selection.style.height = e.height * 100 + '%';
+      badge.textContent = elementLabel(e);
+      selection.classList.add('show');
+    } else {
+      selection.classList.remove('show');
+    }
     for (const el of overlay.children) {
-      const on = el.dataset.id === String(e && e.elementId);
-      el.classList.toggle('hover', on);
-      const badge = el.querySelector('.element-badge');
-      if (on && e) {
-        if (!badge) {
-          const b = document.createElement('span');
-          b.className = 'element-badge';
-          b.textContent = elementLabel(e);
-          el.appendChild(b);
-        } else {
-          badge.textContent = elementLabel(e);
-        }
-      } else if (badge) {
-        badge.remove();
-      }
+      el.classList.toggle('hover', el.dataset.id === String(e && e.elementId));
     }
     if (e) {
       renderTooltip(e);

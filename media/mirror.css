@@ -142,21 +142,35 @@ canvas {
   background: var(--vscode-list-activeSelectionBackground, rgba(56, 138, 221, 0.35));
 }
 
-.element-badge {
+#selection {
   position: absolute;
-  top: -1px;
-  left: -1px;
+  box-sizing: border-box;
+  border: 2px solid #ff9800;
+  background: rgba(255, 152, 0, 0.08);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+  display: none;
+  z-index: 3;
+}
+
+#selection.show {
+  display: block;
+}
+
+#selection-badge {
+  position: absolute;
+  top: -20px;
+  left: -2px;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
-  padding: 1px 5px;
-  background: #388add;
-  color: #fff;
-  border-radius: 2px 0 6px 0;
-  z-index: 2;
+  padding: 2px 7px;
+  background: #ff9800;
+  color: #000;
+  border-radius: 3px 3px 0 0;
 }
 
 #context-menu {
