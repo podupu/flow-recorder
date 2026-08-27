@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { FlowEditorProvider } from './flowEditorProvider';
 import { AndroidMirrorPanel } from './mirrorPanel';
-import { appendFlowStep } from './flowDocument';
+import { appendFlowStep, parseFlowDocument } from './flowDocument';
 import * as adb from './android/adb';
 
 /**
@@ -70,7 +70,8 @@ export function activate(context: vscode.ExtensionContext) {
         deviceId = picked.label;
       }
 
-      await AndroidMirrorPanel.createOrShow(context, deviceId, (step) => appendFlowStep(document, step));
+      const config = parseFlowDocument(document).config;
+      await AndroidMirrorPanel.createOrShow(context, deviceId, config, (step) => appendFlowStep(document, step));
     })
   );
 }

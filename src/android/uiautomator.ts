@@ -115,15 +115,3 @@ export function filterSelectableNodes(
   return result;
 }
 
-/**
- * Delegating shim: kept so the compile gate stays green until the mirror panel switches over
- * to `toMaestroStep` in a later task.
- */
-export function toMaestroSelector(
-  node: UiNode | undefined,
-  x: number,
-  y: number,
-  screen: { width: number; height: number }
-): any {
-  return { tapOn: resolveElementSelector(node, x, y, screen) };
-}
