@@ -140,8 +140,12 @@ export class AndroidMirrorPanel {
   }
 
   private async emit(step: any): Promise<void> {
-    const stamped = this.optional ? { ...step, optional: true } : step;
-    await this.appendStep(stamped);
+    if (this.optional) {
+      const obj = typeof step === 'string' ? { [step]: null } : step;
+      await this.appendStep({ ...obj, optional: true });
+    } else {
+      await this.appendStep(step);
+    }
   }
 
   private nodeAt(elementId: number | undefined): SelectableUiNode | undefined {
@@ -386,8 +390,8 @@ export class AndroidMirrorPanel {
       return;
     }
     try {
-      await adb.launchApp(this.deviceId, appId);
       if (clearState) await adb.clearState(this.deviceId, appId);
+      await adb.launchApp(this.deviceId, appId);
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to launch app: ${err.message}`);
       return;
@@ -461,7 +465,12 @@ export class AndroidMirrorPanel {
 
   private async handleSetClipboard(text: string): Promise<void> {
     if (!text) return;
-    await adb.setClipboard(this.deviceId, text);
+    try {
+      await adb.setClipboard(this.deviceId, text);
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`Failed to set clipboard: ${err.message}`);
+      return;
+    }
     await this.emit({ setClipboard: text });
   }
 
