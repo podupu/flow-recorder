@@ -43,3 +43,14 @@ export async function deleteFlowStep(document: vscode.TextDocument, index: numbe
   parsed.steps.splice(index, 1);
   await writeFlowDocument(document, parsed);
 }
+
+export async function updateStep(
+  document: vscode.TextDocument,
+  index: number,
+  patch: Record<string, any>
+): Promise<void> {
+  const parsed = parseFlowDocument(document);
+  if (index < 0 || index >= parsed.steps.length) return;
+  parsed.steps[index] = { ...parsed.steps[index], ...patch };
+  await writeFlowDocument(document, parsed);
+}
