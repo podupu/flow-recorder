@@ -12,6 +12,18 @@
     ));
   }
 
+  function showStatus(text) {
+    let status = document.getElementById('status');
+    if (!status) {
+      status = document.createElement('div');
+      status.id = 'status';
+      document.body.insertBefore(status, blocksEl);
+    }
+    status.textContent = text;
+    status.style.display = 'block';
+    setTimeout(() => { status.style.display = 'none'; }, 2000);
+  }
+
   function render(doc) {
     blocksEl.innerHTML = '';
     const steps = doc.steps || [];
@@ -133,18 +145,18 @@
   const commandSubmit = document.getElementById('commandSubmit');
 
   const FIELD_SPECS = {
-    assertVisible: [{ id: 'selector', label: 'Text or selector', type: 'text' }],
-    assertNotVisible: [{ id: 'selector', label: 'Text or selector', type: 'text' }],
+    assertVisible: [{ id: 'selector', label: 'Text or selector', type: 'text', required: true }],
+    assertNotVisible: [{ id: 'selector', label: 'Text or selector', type: 'text', required: true }],
     waitForAnimationToEnd: [{ id: 'timeout', label: 'Timeout (ms)', type: 'number', value: 5000 }],
     extendedWaitUntil: [
-      { id: 'selector', label: 'Visible text', type: 'text' },
+      { id: 'selector', label: 'Visible text', type: 'text', required: true },
       { id: 'timeout', label: 'Timeout (ms)', type: 'number', value: 120000 }
     ],
-    openLink: [{ id: 'uri', label: 'Link / URI', type: 'text' }],
-    runFlow: [{ id: 'path', label: 'Flow file path', type: 'text' }],
+    openLink: [{ id: 'uri', label: 'Link / URI', type: 'text', required: true }],
+    runFlow: [{ id: 'path', label: 'Flow file path', type: 'text', required: true }],
     copyTextFrom: [
-      { id: 'selector', label: 'Element text', type: 'text' },
-      { id: 'toVar', label: 'Variable name', type: 'text' }
+      { id: 'selector', label: 'Element text', type: 'text', required: true },
+      { id: 'toVar', label: 'Variable name', type: 'text', required: true }
     ]
   };
 
@@ -181,9 +193,16 @@
   commandSubmit.addEventListener('click', () => {
     const args = {};
     const specs = FIELD_SPECS[commandType.value] || [];
+    let missing = false;
     specs.forEach((spec) => {
-      args[spec.id] = document.getElementById('cmd-' + spec.id).value;
+      const value = document.getElementById('cmd-' + spec.id).value;
+      if (spec.required && !value.trim()) missing = true;
+      args[spec.id] = value;
     });
+    if (missing) {
+      showStatus('All fields are required');
+      return;
+    }
     vscode.postMessage({
       type: 'addCommand',
       command: { type: commandType.value, args }

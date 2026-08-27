@@ -41,12 +41,15 @@
   }
 
   function elementAt(xPct, yPct) {
+    let best = null;
     for (const e of elements) {
       if (xPct >= e.left && xPct <= e.left + e.width && yPct >= e.top && yPct <= e.top + e.height) {
-        return e;
+        if (!best || e.width * e.height < best.width * best.height) {
+          best = e;
+        }
       }
     }
-    return null;
+    return best;
   }
 
   function renderOverlay() {
@@ -61,6 +64,7 @@
       box.style.height = e.height * 100 + '%';
       overlay.appendChild(box);
     }
+    if (hoveredElement) updateHover(hoveredElement);
   }
 
   function showStatus(text) {
@@ -110,6 +114,20 @@
     updateHover(elementAt(p.xPct, p.yPct));
   });
 
+  canvas.addEventListener('pointercancel', () => {
+    if (gesture) {
+      clearTimeout(gesture.holdTimer);
+      gesture = null;
+    }
+  });
+
+  canvas.addEventListener('lostpointercapture', () => {
+    if (gesture) {
+      clearTimeout(gesture.holdTimer);
+      gesture = null;
+    }
+  });
+
   canvas.addEventListener('pointerup', (e) => {
     if (!gesture) return;
     clearTimeout(gesture.holdTimer);
@@ -139,12 +157,14 @@
         xPct: p.xPct,
         yPct: p.yPct
       });
+      lastTapTime = 0;
     } else if (el) {
       vscode.postMessage({ type: 'elementTap', elementId: el.elementId });
+      lastTapTime = now;
     } else {
       vscode.postMessage({ type: 'tap', xPct: p.xPct, yPct: p.yPct });
+      lastTapTime = now;
     }
-    lastTapTime = now;
     gesture = null;
     showTapDot(p);
   });
@@ -209,7 +229,7 @@
     pasteText: () => vscode.postMessage({ type: 'pasteText' }),
     scroll: () => vscode.postMessage({ type: 'scroll' }),
     stopApp: () => vscode.postMessage({ type: 'stopApp' }),
-    killApp: () => vscode.postMessage({ type: 'killApp' }),
+    killApp: () => vscode.postMessage({ type: 'killApp', clearState: launchClear.checked }),
     clearState: () => vscode.postMessage({ type: 'clearState' }),
     toggleDarkMode: () => vscode.postMessage({ type: 'toggleDarkMode' }),
     toggleAirplaneMode: () => vscode.postMessage({ type: 'toggleAirplaneMode' })

@@ -103,8 +103,10 @@ export class FlowEditorProvider implements vscode.CustomTextEditorProvider {
           break;
 
         case 'addCommand': {
-          const step = buildCommandStep(message.command);
-          if (step) await appendFlowStep(document, step);
+          if (message.command && message.command.type) {
+            const step = buildCommandStep(message.command);
+            if (step) await appendFlowStep(document, step);
+          }
           break;
         }
 

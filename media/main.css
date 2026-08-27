@@ -167,3 +167,9 @@ button.secondary:hover {
   flex: 1;
   min-width: 0;
 }
+
+#status {
+  padding: 8px 0;
+  font-size: 13px;
+  opacity: 0.7;
+}

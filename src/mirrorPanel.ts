@@ -43,6 +43,8 @@ export class AndroidMirrorPanel {
     appendStep: (step: any) => Promise<void>
   ): Promise<void> {
     if (AndroidMirrorPanel.current) {
+      AndroidMirrorPanel.current.flowConfig = flowConfig;
+      AndroidMirrorPanel.current.appendStep = appendStep;
       AndroidMirrorPanel.current.panel.reveal(vscode.ViewColumn.Beside);
       return;
     }
@@ -61,13 +63,15 @@ export class AndroidMirrorPanel {
     private readonly context: vscode.ExtensionContext,
     panel: vscode.WebviewPanel,
     private readonly deviceId: string,
-    private readonly flowConfig: FlowConfig,
-    private readonly appendStep: (step: any) => Promise<void>
+    private flowConfig: FlowConfig,
+    private appendStep: (step: any) => Promise<void>
   ) {
     this.panel = panel;
     this.panel.webview.html = this.getHtml();
     this.panel.onDidDispose(() => this.dispose());
-    this.panel.webview.onDidReceiveMessage((msg) => this.handleMessage(msg));
+    this.panel.webview.onDidReceiveMessage((msg) => {
+      this.handleMessage(msg).catch((err) => vscode.window.showErrorMessage('Command failed: ' + err.message));
+    });
   }
 
   private async init(): Promise<void> {
@@ -290,6 +294,10 @@ export class AndroidMirrorPanel {
       }
       await this.emit({ [commandKey]: resolveElementSelector(node, c.x, c.y, this.screenSize) });
     } else {
+      if (!Number.isFinite(msg.xPct) || !Number.isFinite(msg.yPct)) {
+        vscode.window.showWarningMessage('Hover an element, or press on the screen, to long-press or double-tap.');
+        return;
+      }
       const x = msg.xPct * this.screenSize.width;
       const y = msg.yPct * this.screenSize.height;
       try {
@@ -402,7 +410,10 @@ export class AndroidMirrorPanel {
 
   private async handleStopApp(): Promise<void> {
     const appId = this.appId();
-    if (!appId) return;
+    if (!appId) {
+      vscode.window.showErrorMessage('No appId in the flow config - add one to use this command.');
+      return;
+    }
     try {
       await adb.stopApp(this.deviceId, appId);
     } catch (err: any) {
@@ -414,7 +425,10 @@ export class AndroidMirrorPanel {
 
   private async handleKillApp(clearState: boolean): Promise<void> {
     const appId = this.appId();
-    if (!appId) return;
+    if (!appId) {
+      vscode.window.showErrorMessage('No appId in the flow config - add one to use this command.');
+      return;
+    }
     try {
       await adb.killApp(this.deviceId, appId, clearState);
     } catch (err: any) {
@@ -426,7 +440,10 @@ export class AndroidMirrorPanel {
 
   private async handleClearState(): Promise<void> {
     const appId = this.appId();
-    if (!appId) return;
+    if (!appId) {
+      vscode.window.showErrorMessage('No appId in the flow config - add one to use this command.');
+      return;
+    }
     try {
       await adb.clearState(this.deviceId, appId);
     } catch (err: any) {
@@ -499,13 +516,14 @@ export class AndroidMirrorPanel {
   }
 
   private async handleToggleDarkMode(): Promise<void> {
-    this.darkMode = !this.darkMode;
+    const next = !this.darkMode;
     try {
-      await adb.setDarkMode(this.deviceId, this.darkMode);
+      await adb.setDarkMode(this.deviceId, next);
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to toggle dark mode: ${err.message}`);
       return;
     }
+    this.darkMode = next;
     await this.emit('toggleDarkMode');
   }
 
@@ -560,6 +578,7 @@ export class AndroidMirrorPanel {
       <input id="eraseCount" type="number" value="50" min="1" max="100" />
       <button id="doErase">Erase</button>
       <button data-action="pressKey" data-key="back">Back</button>
+      <button data-action="back">Back</button>
       <button data-action="pressKey" data-key="home">Home</button>
       <button data-action="pressKey" data-key="enter">Enter</button>
       <button data-action="hideKeyboard">Hide KB</button>
