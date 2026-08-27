@@ -114,6 +114,12 @@
       }
       row.addEventListener('mouseenter', () => updateHover(e));
       row.addEventListener('click', () => vscode.postMessage({ type: 'elementTap', elementId: e.elementId }));
+      row.addEventListener('contextmenu', (ev) => {
+        ev.preventDefault();
+        menuTarget = e;
+        updateHover(e);
+        showMenu(ev.clientX, ev.clientY);
+      });
       list.appendChild(row);
     }
     if (hoveredElement) updateHover(hoveredElement);
