@@ -4,9 +4,10 @@ export interface UiNode {
   contentDesc?: string;
   className?: string;
   bounds: { left: number; top: number; right: number; bottom: number };
+  /** Index of this node's parent in the parsed array, or -1 for the root. */
+  parentId?: number;
 }
 
-const NODE_REGEX = /<node\b([^>]*)\/?>/g;
 const ATTR_REGEX = /(\w[\w-]*)="([^"]*)"/g;
 
 function parseAttrs(attrString: string): Record<string, string> {
@@ -26,26 +27,35 @@ function parseBounds(boundsStr: string) {
 }
 
 /**
- * uiautomator dump XML is a plain nested tree of <node ...> elements. We don't need the
- * parent/child structure for hit-testing - just every node's bounds + identifying attributes -
- * so a regex scan avoids pulling in a full XML parser dependency.
+ * uiautomator dump XML is a plain nested tree of <node ...> elements. We walk it with a
+ * stack so every parsed node knows its parent (for walking up to a labeled ancestor), while
+ * still avoiding a full XML parser dependency.
  */
 export function parseUiNodes(xml: string): UiNode[] {
   const nodes: UiNode[] = [];
-  let match: RegExpExecArray | null;
-  NODE_REGEX.lastIndex = 0;
-  while ((match = NODE_REGEX.exec(xml))) {
-    const attrs = parseAttrs(match[1]);
+  const stack: number[] = [];
+  const NODE_RE = /<node\b([^>]*?)(\/)?>|<\/node\s*>/g;
+  let m: RegExpExecArray | null;
+  NODE_RE.lastIndex = 0;
+  while ((m = NODE_RE.exec(xml))) {
+    if (m[0].charAt(1) === '/') {
+      stack.pop();
+      continue;
+    }
+    const attrs = parseAttrs(m[1]);
     if (!attrs.bounds) continue;
     const bounds = parseBounds(attrs.bounds);
     if (!bounds) continue;
-    nodes.push({
+    const node: UiNode = {
       text: attrs.text || undefined,
       resourceId: attrs['resource-id'] || undefined,
       contentDesc: attrs['content-desc'] || undefined,
       className: attrs.class || undefined,
-      bounds
-    });
+      bounds,
+      parentId: stack.length ? stack[stack.length - 1] : -1
+    };
+    nodes.push(node);
+    if (!m[2]) stack.push(nodes.length - 1);
   }
   return nodes;
 }
@@ -92,26 +102,34 @@ export function toMaestroStep(
   return { [command]: resolveElementSelector(node, x, y, screen) };
 }
 
-export interface SelectableUiNode extends UiNode {
-  elementId: number;
+export function hasLabel(node: UiNode): boolean {
+  return Boolean((node.text && node.text.trim()) || node.resourceId || node.contentDesc);
 }
 
-export function filterSelectableNodes(
-  nodes: UiNode[],
-  screen: { width: number; height: number }
-): SelectableUiNode[] {
-  const screenArea = screen.width * screen.height;
-  const result: SelectableUiNode[] = [];
-  for (const node of nodes) {
-    const { left, top, right, bottom } = node.bounds;
-    const w = right - left;
-    const h = bottom - top;
-    if (w <= 0 || h <= 0) continue;
-    if (w * h > screenArea * 0.9) continue;
-    const hasLabel = Boolean((node.text && node.text.trim()) || node.resourceId || node.contentDesc);
-    if (!hasLabel) continue;
-    result.push({ ...node, elementId: result.length });
+export function isSelectable(node: UiNode, screen: { width: number; height: number }): boolean {
+  const { left, top, right, bottom } = node.bounds;
+  const w = right - left;
+  const h = bottom - top;
+  if (w <= 0 || h <= 0) return false;
+  if (w * h > screen.width * screen.height * 0.9) return false;
+  return hasLabel(node);
+}
+
+/** Walks up the ancestor chain to the nearest node with a readable label; returns the original node if none found. */
+export function nearestLabeledAncestor(node: UiNode, nodes: UiNode[]): UiNode {
+  let current: UiNode | undefined = node;
+  while (current && !hasLabel(current)) {
+    const p: UiNode | undefined =
+      current.parentId !== undefined && current.parentId >= 0 ? nodes[current.parentId] : undefined;
+    if (!p) break;
+    current = p;
   }
-  return result;
+  return current || node;
+}
+
+/** Deepest node at the point, then walked up to its nearest labeled ancestor. */
+export function findLabeledNodeAtPoint(nodes: UiNode[], x: number, y: number): UiNode | undefined {
+  const node = findSmallestNodeAtPoint(nodes, x, y);
+  return node ? nearestLabeledAncestor(node, nodes) : undefined;
 }
 

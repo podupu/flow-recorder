@@ -2,10 +2,10 @@ import * as vscode from 'vscode';
 import * as adb from './android/adb';
 import {
   parseUiNodes,
-  findSmallestNodeAtPoint,
+  findLabeledNodeAtPoint,
   resolveElementSelector,
-  filterSelectableNodes,
-  SelectableUiNode
+  isSelectable,
+  UiNode
 } from './android/uiautomator';
 import { classifySwipeDirection } from './gestures';
 
@@ -30,7 +30,7 @@ export class AndroidMirrorPanel {
   private pollTimer: NodeJS.Timeout | undefined;
   private elementTimer: NodeJS.Timeout | undefined;
   private screenSize: { width: number; height: number } | undefined;
-  private selectableNodes: SelectableUiNode[] = [];
+  private allNodes: UiNode[] = [];
   private dumping = false;
   private optional = false;
   private darkMode = false;
@@ -118,13 +118,13 @@ export class AndroidMirrorPanel {
     this.dumping = true;
     try {
       const xml = await adb.dumpUiHierarchy(this.deviceId);
-      const nodes = parseUiNodes(xml);
-      this.selectableNodes = filterSelectableNodes(nodes, this.screenSize);
+      const all = parseUiNodes(xml);
+      this.allNodes = all;
       const screen = this.screenSize;
-      const payload = this.selectableNodes.map((n) => {
+      const payload = all.map((n, i) => {
         const c = elementCenter(n);
         return {
-          elementId: n.elementId,
+          elementId: i,
           text: n.text,
           resourceId: n.resourceId,
           contentDesc: n.contentDesc,
@@ -133,7 +133,9 @@ export class AndroidMirrorPanel {
           top: n.bounds.top / screen.height,
           width: (n.bounds.right - n.bounds.left) / screen.width,
           height: (n.bounds.bottom - n.bounds.top) / screen.height,
-          selector: resolveElementSelector(n, c.x, c.y, screen)
+          selector: resolveElementSelector(n, c.x, c.y, screen),
+          parentId: n.parentId !== undefined ? n.parentId : -1,
+          selectable: isSelectable(n, screen)
         };
       });
       this.panel.webview.postMessage({ type: 'elements', nodes: payload });
@@ -153,9 +155,9 @@ export class AndroidMirrorPanel {
     }
   }
 
-  private nodeAt(elementId: number | undefined): SelectableUiNode | undefined {
+  private nodeAt(elementId: number | undefined): UiNode | undefined {
     if (elementId === undefined) return undefined;
-    return this.selectableNodes[elementId];
+    return this.allNodes[elementId];
   }
 
   private async handleMessage(msg: any): Promise<void> {
@@ -248,7 +250,7 @@ export class AndroidMirrorPanel {
       vscode.window.showErrorMessage(`Failed to send tap to device: ${err.message}`);
       return;
     }
-    const node = findSmallestNodeAtPoint(this.selectableNodes, x, y);
+    const node = findLabeledNodeAtPoint(this.allNodes, x, y);
     await this.emit({ tapOn: resolveElementSelector(node, x, y, this.screenSize) });
     void this.refreshElements();
   }
@@ -572,13 +574,6 @@ export class AndroidMirrorPanel {
       <div id="tooltip">
         <div id="overlap-stack"></div>
       </div>
-    </div>
-    <div id="elements-panel">
-      <div class="panel-header">
-        <span>Elements</span>
-        <button id="toggle-elements" title="Show/hide list">-</button>
-      </div>
-      <div id="elements-list"></div>
     </div>
   </div>
   <div id="context-menu" class="hidden"></div>

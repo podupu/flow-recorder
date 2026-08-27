@@ -26,7 +26,6 @@
     } else if (msg.type === 'elements') {
       elements = msg.nodes || [];
       renderOverlay();
-      renderElementList();
     } else if (msg.type === 'status') {
       showStatus(msg.text);
     }
@@ -41,6 +40,10 @@
     return { xPct: (clientX - r.left) / r.width, yPct: (clientY - r.top) / r.height };
   }
 
+  function isLabeled(e) {
+    return !!(e.text || e.resourceId || e.contentDesc);
+  }
+
   function elementAt(xPct, yPct) {
     let best = null;
     for (const e of elements) {
@@ -50,14 +53,25 @@
         }
       }
     }
+    while (best && !isLabeled(best) && best.parentId >= 0 && elements[best.parentId]) {
+      best = elements[best.parentId];
+    }
     return best;
   }
 
   function elementsAt(xPct, yPct) {
+    const seen = new Set();
     const hits = [];
     for (const e of elements) {
       if (xPct >= e.left && xPct <= e.left + e.width && yPct >= e.top && yPct <= e.top + e.height) {
-        hits.push(e);
+        let node = e;
+        while (node && !isLabeled(node) && node.parentId >= 0 && elements[node.parentId]) {
+          node = elements[node.parentId];
+        }
+        if (node && isLabeled(node) && !seen.has(node.elementId)) {
+          seen.add(node.elementId);
+          hits.push(node);
+        }
       }
     }
     hits.sort((a, b) => (a.width * a.height) - (b.width * b.height));
@@ -67,6 +81,7 @@
   function renderOverlay() {
     overlay.innerHTML = '';
     for (const e of elements) {
+      if (!e.selectable) continue;
       const box = document.createElement('div');
       box.className = 'element-box';
       box.dataset.id = e.elementId;
@@ -89,42 +104,6 @@
     return e.text || e.resourceId || e.contentDesc || '(unnamed)';
   }
 
-  function elementIdSuffix(e) {
-    if (e.text && e.resourceId) return e.resourceId;
-    return '';
-  }
-
-  function renderElementList() {
-    const list = document.getElementById('elements-list');
-    list.innerHTML = '';
-    for (const e of elements) {
-      const row = document.createElement('div');
-      row.className = 'element-row';
-      row.dataset.id = e.elementId;
-      const label = document.createElement('span');
-      label.className = 'element-label';
-      label.textContent = elementLabel(e);
-      row.appendChild(label);
-      const suffix = elementIdSuffix(e);
-      if (suffix) {
-        const idSpan = document.createElement('span');
-        idSpan.className = 'element-id';
-        idSpan.textContent = suffix;
-        row.appendChild(idSpan);
-      }
-      row.addEventListener('mouseenter', () => updateHover(e));
-      row.addEventListener('click', () => vscode.postMessage({ type: 'elementTap', elementId: e.elementId }));
-      row.addEventListener('contextmenu', (ev) => {
-        ev.preventDefault();
-        menuTarget = e;
-        updateHover(e);
-        showMenu(ev.clientX, ev.clientY);
-      });
-      list.appendChild(row);
-    }
-    if (hoveredElement) updateHover(hoveredElement);
-  }
-
   function updateHover(e) {
     hoveredElement = e;
     for (const el of overlay.children) {
@@ -143,9 +122,6 @@
       } else if (badge) {
         badge.remove();
       }
-    }
-    for (const row of document.querySelectorAll('.element-row')) {
-      row.classList.toggle('active', row.dataset.id === String(e && e.elementId));
     }
     if (e) {
       renderTooltip(e);
@@ -295,13 +271,6 @@
     document.body.appendChild(dot);
     setTimeout(() => dot.remove(), 300);
   }
-
-  const toggleElements = document.getElementById('toggle-elements');
-  const elementsPanel = document.getElementById('elements-panel');
-  toggleElements.addEventListener('click', () => {
-    const collapsed = elementsPanel.classList.toggle('collapsed');
-    toggleElements.textContent = collapsed ? '+' : '-';
-  });
 
   // --- Right-click context menu ---
   const contextMenu = document.getElementById('context-menu');

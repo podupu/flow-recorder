@@ -1,44 +1,55 @@
 const assert = require('assert');
 const {
   parseUiNodes,
-  findSmallestNodeAtPoint,
-  resolveElementSelector,
-  filterSelectableNodes
+  isSelectable,
+  findLabeledNodeAtPoint,
+  resolveElementSelector
 } = require('../../out/android/uiautomator');
 
-const XML = `<?xml version="1.0"?>
-<hierarchy>
-  <node text="Login" resource-id="" content-desc="" class="android.widget.Button" bounds="[10,20][200,90]"/>
-  <node text="Email" resource-id="com.app:id/email" content-desc="" class="android.widget.EditText" bounds="[10,100][200,150]"/>
-  <node text="" resource-id="" content-desc="Close" class="android.widget.ImageButton" bounds="[300,10][400,50]"/>
-  <node text="" resource-id="" content-desc="" class="android.widget.FrameLayout" bounds="[0,0][1080,1920]"/>
+const XML = `<hierarchy>
+  <node text="" resource-id="" content-desc="" class="android.widget.LinearLayout" bounds="[0,0][1080,1920]">
+    <node text="Settings" resource-id="" content-desc="" class="android.widget.Button" bounds="[0,0][200,100]">
+      <node text="" resource-id="" content-desc="" class="android.widget.View" bounds="[0,0][200,100]"/>
+    </node>
+    <node text="" resource-id="com.app:id/email" content-desc="" class="android.widget.EditText" bounds="[10,100][200,150]"/>
+  </node>
 </hierarchy>`;
 
 describe('uiautomator', () => {
-  it('parses nodes with bounds', () => {
+  it('parses nodes with parent links', () => {
     const nodes = parseUiNodes(XML);
     assert.strictEqual(nodes.length, 4);
-    assert.deepStrictEqual(nodes[0].bounds, { left: 10, top: 20, right: 200, bottom: 90 });
+    assert.strictEqual(nodes[0].parentId, -1);
+    assert.strictEqual(nodes[1].parentId, 0);
+    assert.strictEqual(nodes[2].parentId, 1);
+    assert.strictEqual(nodes[3].parentId, 0);
   });
 
-  it('finds the smallest node containing a point', () => {
+  it('walks up to the nearest labeled ancestor at a point', () => {
     const nodes = parseUiNodes(XML);
-    assert.strictEqual(findSmallestNodeAtPoint(nodes, 100, 60).text, 'Login');
+    const n = findLabeledNodeAtPoint(nodes, 100, 50);
+    assert.strictEqual(n.text, 'Settings');
+  });
+
+  it('returns the labeled node itself when deepest is labeled', () => {
+    const nodes = parseUiNodes(XML);
+    const n = findLabeledNodeAtPoint(nodes, 100, 125);
+    assert.strictEqual(n.resourceId, 'com.app:id/email');
+  });
+
+  it('isSelectable filters by label and size', () => {
+    const nodes = parseUiNodes(XML);
+    const screen = { width: 1080, height: 1920 };
+    assert.strictEqual(isSelectable(nodes[0], screen), false);
+    assert.strictEqual(isSelectable(nodes[1], screen), true);
+    assert.strictEqual(isSelectable(nodes[2], screen), false);
   });
 
   it('resolves selector preferring text, then content-desc, then id, then point', () => {
     const nodes = parseUiNodes(XML);
     const screen = { width: 1080, height: 1920 };
-    assert.deepStrictEqual(resolveElementSelector(nodes[0], 0, 0, screen), { text: 'Login' });
-    assert.deepStrictEqual(resolveElementSelector(nodes[2], 0, 0, screen), { text: 'Close' });
-    assert.deepStrictEqual(resolveElementSelector(nodes[3], 0, 0, screen), { point: '0%,0%' });
-  });
-
-  it('filters to selectable nodes', () => {
-    const nodes = parseUiNodes(XML);
-    const screen = { width: 1080, height: 1920 };
-    const sel = filterSelectableNodes(nodes, screen);
-    assert.strictEqual(sel.length, 3);
-    assert.deepStrictEqual(sel.map((n) => n.text), ['Login', 'Email', undefined]);
+    assert.deepStrictEqual(resolveElementSelector(nodes[1], 0, 0, screen), { text: 'Settings' });
+    assert.deepStrictEqual(resolveElementSelector(nodes[3], 0, 0, screen), { id: 'com.app:id/email' });
+    assert.deepStrictEqual(resolveElementSelector(nodes[0], 0, 0, screen), { point: '0%,0%' });
   });
 });
