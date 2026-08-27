@@ -1,0 +1,47 @@
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--vscode-editor-background);
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family);
+}
+
+#status {
+  padding: 10px;
+  font-size: 13px;
+  opacity: 0.7;
+}
+
+canvas {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+  cursor: crosshair;
+  border: 1px solid var(--vscode-editorWidget-border, #444);
+}
+
+.tap-dot {
+  position: fixed;
+  width: 16px;
+  height: 16px;
+  margin-left: -8px;
+  margin-top: -8px;
+  border-radius: 50%;
+  background: rgba(56, 138, 221, 0.5);
+  border: 2px solid #388add;
+  pointer-events: none;
+  animation: tapfade 0.3s ease-out forwards;
+}
+
+@keyframes tapfade {
+  from {
+    transform: scale(0.5);
+    opacity: 1;
+  }
+  to {
+    transform: scale(1.8);
+    opacity: 0;
+  }
+}

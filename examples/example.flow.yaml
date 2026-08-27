@@ -1,0 +1,13 @@
+appId: com.example.app
+---
+- tapOn: "Login"
+- takeScreenshot: assets/step1.png
+- apiRequest:
+    method: POST
+    url: https://api.example.com/session
+    body: '{"user":"demo"}'
+  response:
+    status: 200
+    durationMs: 142
+    body: '{"token":"abc123"}'
+- assertVisible: "Welcome"

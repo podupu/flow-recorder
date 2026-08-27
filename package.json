@@ -1,0 +1,53 @@
+{
+  "name": "flow-recorder",
+  "displayName": "Flow Recorder",
+  "description": "Maestro Studio-style visual recorder for mixed UI + API flows, as a VS Code custom editor.",
+  "version": "0.0.1",
+  "publisher": "local-dev",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Testing",
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "flowRecorder.flowEditor",
+        "displayName": "Flow Recorder",
+        "selector": [
+          {
+            "filenamePattern": "*.flow.yaml"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "flowRecorder.startAndroidMirror",
+        "title": "Flow Recorder: Start Android Mirror",
+        "category": "Flow Recorder"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/test-electron": "^3.1.0",
+    "mocha": "^11.8.0",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  }
+}
