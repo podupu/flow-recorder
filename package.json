@@ -11,7 +11,9 @@
     "Testing",
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onLanguage:yaml"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "customEditors": [
@@ -23,14 +25,90 @@
             "filenamePattern": "*.flow.yaml"
           }
         ],
-        "priority": "default"
+        "priority": "option"
       }
     ],
     "commands": [
       {
         "command": "flowRecorder.startAndroidMirror",
-        "title": "Flow Recorder: Start Android Mirror",
+        "title": "Start Android Mirror",
         "category": "Flow Recorder"
+      },
+      {
+        "command": "flowRecorder.addApiBlock",
+        "title": "Add API Block",
+        "category": "Flow Recorder"
+      },
+      {
+        "command": "flowRecorder.addScreenshotBlock",
+        "title": "Add Screenshot Block",
+        "category": "Flow Recorder"
+      },
+      {
+        "command": "flowRecorder.openBlockView",
+        "title": "Open Visual Block View",
+        "category": "Flow Recorder"
+      },
+      {
+        "command": "flowRecorder.selectEnvironment",
+        "title": "Select Environment",
+        "category": "Flow Recorder"
+      },
+      {
+        "command": "flowRecorder.selectPlatform",
+        "title": "Select Platform",
+        "category": "Flow Recorder"
+      },
+      {
+        "command": "flowRecorder.editEnvironments",
+        "title": "Edit Environments",
+        "category": "Flow Recorder"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "flowRecorder.addApiBlock",
+          "when": "resourceFilename =~ /\\.flow\\.yaml$/",
+          "group": "flowRecorder@1"
+        },
+        {
+          "command": "flowRecorder.addScreenshotBlock",
+          "when": "resourceFilename =~ /\\.flow\\.yaml$/",
+          "group": "flowRecorder@2"
+        },
+        {
+          "command": "flowRecorder.startAndroidMirror",
+          "when": "resourceFilename =~ /\\.flow\\.yaml$/",
+          "group": "flowRecorder@3"
+        },
+        {
+          "command": "flowRecorder.openBlockView",
+          "when": "resourceFilename =~ /\\.flow\\.yaml$/",
+          "group": "flowRecorder@4"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "flowRecorder.addApiBlock",
+          "when": "resourceFilename =~ /\\.flow\\.yaml$/"
+        },
+        {
+          "command": "flowRecorder.addScreenshotBlock",
+          "when": "resourceFilename =~ /\\.flow\\.yaml$/"
+        },
+        {
+          "command": "flowRecorder.openBlockView",
+          "when": "resourceFilename =~ /\\.flow\\.yaml$/"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "flowRecorder.selectEnvironment",
+        "key": "ctrl+alt+e",
+        "mac": "cmd+alt+e",
+        "when": "editorTextFocus && resourceFilename =~ /\\.flow\\.yaml$/"
       }
     ]
   },
@@ -45,6 +123,7 @@
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
     "@vscode/test-electron": "^3.1.0",
+    "ajv": "^8.20.0",
     "mocha": "^11.8.0",
     "typescript": "^5.4.0"
   },

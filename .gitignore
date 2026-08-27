@@ -3,3 +3,6 @@ out/
 .vscode-test/
 *.vsix
 .superpowers/
+
+# Maestro debug artifacts from the Testing view
+.maestro-debug/

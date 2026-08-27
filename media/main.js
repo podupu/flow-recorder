@@ -24,6 +24,9 @@
     setTimeout(() => { status.style.display = 'none'; }, 2000);
   }
 
+  // path -> webview URI, supplied by the extension (webviews cannot load file:// directly).
+  let assets = {};
+
   function render(doc) {
     blocksEl.innerHTML = '';
     const steps = doc.steps || [];
@@ -47,21 +50,53 @@
       const body = document.createElement('div');
 
       if (step.apiRequest) {
-        card.classList.add('block-api');
+        // Legacy block from the old scaffold - not a real Maestro command.
+        card.classList.add('block-api', 'block-invalid');
         const req = step.apiRequest;
-        const res = step.response || {};
         body.innerHTML = `
-          <div class="block-title">API &middot; ${escapeHtml(req.method)} ${escapeHtml(req.url)}</div>
-          <div class="block-meta">status ${res.status ?? '-'} &middot; ${res.durationMs ?? '-'}ms</div>
-          ${res.body ? `<pre class="block-body">${escapeHtml(res.body)}</pre>` : ''}
+          <div class="block-title">apiRequest &middot; ${escapeHtml(req.method || '')} ${escapeHtml(req.url || '')}</div>
+          <div class="block-invalid-note">Not a Maestro command - reopen this flow to convert it to evalScript + assertTrue.</div>
+        `;
+      } else if (step.evalScript) {
+        card.classList.add('block-script');
+        body.innerHTML = `
+          <div class="block-title">evalScript</div>
+          <pre class="block-body">${escapeHtml(step.evalScript)}</pre>
+        `;
+      } else if (step.runScript) {
+        card.classList.add('block-script');
+        body.innerHTML = `
+          <div class="block-title">runScript</div>
+          <div class="block-meta">${escapeHtml(step.runScript)}</div>
+        `;
+      } else if (step.assertTrue) {
+        card.classList.add('block-assert');
+        body.innerHTML = `
+          <div class="block-title">assertTrue</div>
+          <pre class="block-body">${escapeHtml(step.assertTrue)}</pre>
         `;
       } else if (step.takeScreenshot) {
         card.classList.add('block-screenshot');
+        const shotPath = step.takeScreenshot;
+        const shotSrc = assets[shotPath];
         body.innerHTML = `
           <div class="block-title">Screenshot</div>
-          <div class="screenshot-placeholder">${escapeHtml(step.takeScreenshot)}</div>
-          ${step.note ? `<div class="block-meta">${escapeHtml(step.note)}</div>` : ''}
+          ${shotSrc
+            ? `<img class="screenshot-thumb" src="${escapeHtml(shotSrc)}" alt="${escapeHtml(shotPath)}" />`
+            : ''}
+          <div class="block-meta">${escapeHtml(shotPath)}</div>
         `;
+        // The file may have been moved or deleted since it was recorded.
+        const img = body.querySelector('.screenshot-thumb');
+        if (img) {
+          img.addEventListener('error', () => {
+            img.remove();
+            const missing = document.createElement('div');
+            missing.className = 'screenshot-missing';
+            missing.textContent = 'Image not found: ' + shotPath;
+            body.appendChild(missing);
+          });
+        }
       } else if (step.tapOn) {
         card.classList.add('block-tap');
         const target = typeof step.tapOn === 'string'
@@ -91,6 +126,7 @@
   window.addEventListener('message', (event) => {
     const message = event.data;
     if (message.type === 'update') {
+      assets = message.assets || {};
       render(message.doc);
     }
   });
@@ -136,7 +172,9 @@
   });
 
   document.getElementById('addScreenshot').addEventListener('click', () => {
-    vscode.postMessage({ type: 'addScreenshotBlock' });
+    const name = prompt('Screenshot name (saved to assets/ beside this flow):', 'screenshot');
+    if (name === null) return;
+    vscode.postMessage({ type: 'addScreenshotBlock', name });
   });
 
   const commandForm = document.getElementById('commandForm');

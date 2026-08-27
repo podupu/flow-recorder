@@ -7,6 +7,9 @@
   const img = new Image();
   let frameLoaded = false;
   let elements = [];
+  // Soft-keyboard region (0-1 fractions) or null. The IME is a separate window that never
+  // appears in the hierarchy dump, so points inside it must not resolve to the app view behind.
+  let keyboard = null;
   let hoveredElement = null;
   let lastTapTime = 0;
 
@@ -24,6 +27,8 @@
       img.src = 'data:image/png;base64,' + msg.data;
     } else if (msg.type === 'elements') {
       elements = msg.nodes || [];
+      keyboard = msg.keyboard || null;
+      renderKeyboardMask();
       renderOverlay();
     } else if (msg.type === 'status') {
       showStatus(msg.text);
@@ -31,6 +36,9 @@
       showHierarchyProblem(msg.text);
     } else if (msg.type === 'hierarchyOk') {
       clearHierarchyProblem();
+    } else if (msg.type === 'target') {
+      const el = document.getElementById('record-target-path');
+      if (el) el.textContent = msg.path;
     }
   });
 
@@ -64,7 +72,33 @@
     return !!(e.text || e.resourceId || e.contentDesc);
   }
 
+  function inKeyboard(xPct, yPct) {
+    if (!keyboard) return false;
+    return (
+      xPct >= keyboard.left &&
+      xPct <= keyboard.left + keyboard.width &&
+      yPct >= keyboard.top &&
+      yPct <= keyboard.top + keyboard.height
+    );
+  }
+
+  function renderKeyboardMask() {
+    const mask = document.getElementById('keyboard-mask');
+    if (!mask) return;
+    if (!keyboard) {
+      mask.classList.remove('show');
+      return;
+    }
+    mask.style.left = keyboard.left * 100 + '%';
+    mask.style.top = keyboard.top * 100 + '%';
+    mask.style.width = keyboard.width * 100 + '%';
+    mask.style.height = keyboard.height * 100 + '%';
+    mask.classList.add('show');
+  }
+
   function elementAt(xPct, yPct) {
+    // Anything under the keyboard belongs to the IME window, not to the app view behind it.
+    if (inKeyboard(xPct, yPct)) return null;
     let best = null;
     for (const e of elements) {
       if (xPct >= e.left && xPct <= e.left + e.width && yPct >= e.top && yPct <= e.top + e.height) {
@@ -172,6 +206,16 @@
     const duration = now - gesture.startTime;
     const p = gesture.last;
     const el = elementAt(p.xPct, p.yPct);
+    // A plain tap on the soft keyboard types on the device but is never recorded - the IME
+    // has no hierarchy nodes, so any selector would be a guess. Swipes still pass through
+    // (gesture typing, and swiping down to dismiss the keyboard).
+    if (!gesture.moved && !gesture.held && inKeyboard(p.xPct, p.yPct)) {
+      vscode.postMessage({ type: 'keyboardTap', xPct: p.xPct, yPct: p.yPct });
+      lastTapTime = now;
+      gesture = null;
+      showTapDot(p);
+      return;
+    }
     if (gesture.moved) {
       vscode.postMessage({
         type: 'swipe',
@@ -228,32 +272,134 @@
     });
   }
 
+
+  // --- Mirror zoom ---
+  // Scaling #stage keeps every overlay correct: element boxes, the selection and the keyboard
+  // mask are all positioned in percentages, and taps are already reported as fractions.
+  const ZOOM_STEPS = [25, 50, 75, 100, 125, 150, 200];
+  const DEFAULT_ZOOM = 50;
+  const stage = document.getElementById('stage');
+  const zoomLabel = document.getElementById('zoom-label');
+  let zoom = DEFAULT_ZOOM;
+
+  function applyZoom() {
+    if (!stage) return;
+    // A class, not an inline-style probe: the canvas rule must key off zoom state directly.
+    stage.classList.add('zoomed');
+    stage.style.width = zoom + '%';
+    if (zoomLabel) zoomLabel.textContent = zoom + '%';
+    try {
+      vscode.setState(Object.assign({}, vscode.getState() || {}, { zoom: zoom }));
+    } catch (_) {
+      // State is a convenience only.
+    }
+  }
+
+  function stepZoom(direction) {
+    let i = ZOOM_STEPS.indexOf(zoom);
+    if (i === -1) i = ZOOM_STEPS.indexOf(DEFAULT_ZOOM);
+    zoom = ZOOM_STEPS[Math.min(ZOOM_STEPS.length - 1, Math.max(0, i + direction))];
+    applyZoom();
+  }
+
+  const zoomBar = document.getElementById('zoom-controls');
+  if (zoomBar) {
+    zoomBar.addEventListener('click', (e) => {
+      const button = e.target.closest('button[data-zoom]');
+      if (!button) return;
+      if (button.dataset.zoom === 'in') stepZoom(1);
+      else if (button.dataset.zoom === 'out') stepZoom(-1);
+    });
+  }
+
+  try {
+    const saved = vscode.getState();
+    // A panel that last ran with the old Fit mode has 'fit' persisted; that is no longer a
+    // valid width, so anything but a known step falls back to the default.
+    if (saved && ZOOM_STEPS.indexOf(saved.zoom) !== -1) zoom = saved.zoom;
+  } catch (_) {
+    // Ignore unreadable state.
+  }
+  applyZoom();
+
   // --- Right-click context menu ---
   const contextMenu = document.getElementById('context-menu');
   let menuTarget = null;
 
-  function menuItem(label, onClick) {
+  function menuItem(label, onClick, extraClass) {
     const item = document.createElement('button');
     item.type = 'button';
-    item.className = 'menu-item';
+    item.className = 'menu-item' + (extraClass ? ' ' + extraClass : '');
     item.textContent = label;
     item.addEventListener('click', () => { hideMenu(); onClick(); });
     return item;
   }
 
-  function menuSeparator(text) {
-    const sep = document.createElement('div');
-    sep.className = 'menu-separator';
-    sep.textContent = text;
-    return sep;
+  /** A button that stays in an open group rather than closing the menu (paired with a field). */
+  function menuAction(label, onClick) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'menu-item menu-action';
+    item.textContent = label;
+    item.addEventListener('click', onClick);
+    return item;
   }
 
-  function menuField(id, placeholder, type) {
+  function menuField(placeholder, type, value) {
     const input = document.createElement('input');
     input.type = type || 'text';
-    input.id = id;
     input.placeholder = placeholder || '';
+    if (value !== undefined) input.value = value;
+    // Typing in a field must not bubble out and close the menu.
+    input.addEventListener('click', (e) => e.stopPropagation());
     return input;
+  }
+
+  /** A row of small buttons - used for the element gestures, which are the common case. */
+  function menuRow(entries) {
+    const row = document.createElement('div');
+    row.className = 'menu-row';
+    for (const [label, onClick] of entries) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'menu-chip';
+      b.textContent = label;
+      b.addEventListener('click', () => { hideMenu(); onClick(); });
+      row.appendChild(b);
+    }
+    return row;
+  }
+
+  /**
+   * A collapsed section. Everything except the element gestures lives in one of these, which
+   * keeps the menu short enough not to scroll - it used to be ~35 items deep.
+   */
+  function menuGroup(title, build) {
+    const wrap = document.createElement('div');
+    wrap.className = 'menu-group';
+
+    const head = document.createElement('button');
+    head.type = 'button';
+    head.className = 'menu-group-head';
+    head.innerHTML = '<span class="menu-caret">›</span>';
+    head.appendChild(document.createTextNode(' ' + title));
+
+    const bodyEl = document.createElement('div');
+    bodyEl.className = 'menu-group-body';
+
+    head.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = wrap.classList.toggle('open');
+      if (open && !bodyEl.dataset.built) {
+        build(bodyEl);
+        bodyEl.dataset.built = '1';
+      }
+      keepMenuOnScreen();
+    });
+
+    wrap.appendChild(head);
+    wrap.appendChild(bodyEl);
+    return wrap;
   }
 
   function post(msg) {
@@ -276,91 +422,145 @@
   function buildMenu() {
     contextMenu.innerHTML = '';
     const target = targetElement();
-    const targetRow = document.createElement('div');
-    targetRow.className = 'menu-target';
-    targetRow.textContent = target ? elementLabel(target) + (target.resourceId ? '  [' + target.resourceId + ']' : '') : 'Empty area — gestures only';
-    contextMenu.appendChild(targetRow);
 
-    contextMenu.appendChild(menuSeparator('Gestures'));
-    contextMenu.appendChild(menuItem('Tap', () => elementAction('elementTap')));
-    contextMenu.appendChild(menuItem('Long press', () => elementAction('longPress')));
-    contextMenu.appendChild(menuItem('Double tap', () => elementAction('doubleTap')));
-    contextMenu.appendChild(menuItem('Assert visible', () => elementAction('assertVisible')));
-    contextMenu.appendChild(menuItem('Assert not visible', () => elementAction('assertNotVisible')));
-
-    contextMenu.appendChild(menuSeparator('Text & keyboard'));
-    const inputTextField = menuField('menu-input', 'Text to type...');
-    contextMenu.appendChild(inputTextField);
-    contextMenu.appendChild(menuItem('Input text', () => {
-      const el = targetElement();
-      post({ type: 'inputText', text: inputTextField.value, elementId: el ? el.elementId : undefined });
-      inputTextField.value = '';
-    }));
-    const eraseField = menuField('menu-erase', 'Chars to erase', 'number');
-    eraseField.value = '50';
-    contextMenu.appendChild(eraseField);
-    contextMenu.appendChild(menuItem('Erase', () => {
-      post({ type: 'eraseText', count: parseInt(eraseField.value, 10) || 50 });
-    }));
-    contextMenu.appendChild(menuItem('Back', () => post({ type: 'back' })));
-    contextMenu.appendChild(menuItem('Back key', () => post({ type: 'pressKey', key: 'back' })));
-    contextMenu.appendChild(menuItem('Home', () => post({ type: 'pressKey', key: 'home' })));
-    contextMenu.appendChild(menuItem('Enter', () => post({ type: 'pressKey', key: 'enter' })));
-    contextMenu.appendChild(menuItem('Hide keyboard', () => post({ type: 'hideKeyboard' })));
-    contextMenu.appendChild(menuItem('Paste', () => post({ type: 'pasteText' })));
-
-    contextMenu.appendChild(menuSeparator('App'));
-    const launchClear = menuField('menu-launch-clear', '', 'checkbox');
-    const launchWrap = document.createElement('label');
-    launchWrap.className = 'menu-item menu-check';
-    launchWrap.appendChild(launchClear);
-    launchWrap.appendChild(document.createTextNode(' Clear state on launch'));
-    contextMenu.appendChild(launchWrap);
-    contextMenu.appendChild(menuItem('Launch app', () => post({ type: 'launchApp', clearState: launchClear.checked })));
-    contextMenu.appendChild(menuItem('Stop app', () => post({ type: 'stopApp' })));
-    contextMenu.appendChild(menuItem('Kill app', () => post({ type: 'killApp', clearState: launchClear.checked })));
-    contextMenu.appendChild(menuItem('Clear app state', () => post({ type: 'clearState' })));
-    contextMenu.appendChild(menuItem('Toggle dark mode', () => post({ type: 'toggleDarkMode' })));
-
-    contextMenu.appendChild(menuSeparator('Device'));
-    contextMenu.appendChild(menuItem('Landscape', () => post({ type: 'setOrientation', orientation: 'LANDSCAPE' })));
-    contextMenu.appendChild(menuItem('Portrait', () => post({ type: 'setOrientation', orientation: 'PORTRAIT' })));
-    contextMenu.appendChild(menuItem('Scroll', () => post({ type: 'scroll' })));
-    contextMenu.appendChild(menuItem('Toggle airplane mode', () => post({ type: 'toggleAirplaneMode' })));
-    const clipboardField = menuField('menu-clipboard', 'Clipboard text...');
-    contextMenu.appendChild(clipboardField);
-    contextMenu.appendChild(menuItem('Set clipboard', () => {
-      if (clipboardField.value) {
-        post({ type: 'setClipboard', text: clipboardField.value });
-        clipboardField.value = '';
+    // Header: the label only. It previously appended "[resourceId]" even when the label WAS
+    // the resourceId, printing the same long id twice.
+    const head = document.createElement('div');
+    head.className = 'menu-target';
+    if (target) {
+      const label = elementLabel(target);
+      head.textContent = label;
+      if (target.resourceId && target.resourceId !== label) {
+        const sub = document.createElement('div');
+        sub.className = 'menu-target-sub';
+        sub.textContent = target.resourceId;
+        head.appendChild(sub);
       }
-    }));
+    } else {
+      head.textContent = 'Empty area';
+      head.classList.add('menu-target-empty');
+    }
+    contextMenu.appendChild(head);
 
-    contextMenu.appendChild(menuSeparator('Capture'));
-    const shotField = menuField('menu-shot', 'screenshot-name');
-    contextMenu.appendChild(shotField);
-    contextMenu.appendChild(menuItem('Take screenshot', () => {
-      post({ type: 'takeScreenshot', name: shotField.value });
-      shotField.value = '';
-    }));
-    const optionalBox = menuField('menu-optional', '', 'checkbox');
+    // Element gestures - the reason the menu was opened, so always visible.
+    const gestures = document.createElement('div');
+    gestures.className = 'menu-gestures';
+    gestures.appendChild(
+      menuRow([
+        ['Tap', () => elementAction('elementTap')],
+        ['Long press', () => elementAction('longPress')],
+        ['Double tap', () => elementAction('doubleTap')]
+      ])
+    );
+    gestures.appendChild(
+      menuRow([
+        ['Assert visible', () => elementAction('assertVisible')],
+        ['Assert hidden', () => elementAction('assertNotVisible')]
+      ])
+    );
+    contextMenu.appendChild(gestures);
+
+    contextMenu.appendChild(
+      menuGroup('Text & keyboard', (b) => {
+        const text = menuField('Text to type...');
+        b.appendChild(text);
+        b.appendChild(
+          menuAction('Input text', () => {
+            if (!text.value) return;
+            const el = targetElement();
+            post({ type: 'inputText', text: text.value, elementId: el ? el.elementId : undefined });
+            text.value = '';
+            hideMenu();
+          })
+        );
+        const erase = menuField('Characters to erase', 'number', '50');
+        b.appendChild(erase);
+        b.appendChild(
+          menuAction('Erase', () => {
+            post({ type: 'eraseText', count: parseInt(erase.value, 10) || 50 });
+            hideMenu();
+          })
+        );
+        b.appendChild(menuItem('Enter', () => post({ type: 'pressKey', key: 'enter' })));
+        b.appendChild(menuItem('Hide keyboard', () => post({ type: 'hideKeyboard' })));
+        b.appendChild(menuItem('Paste', () => post({ type: 'pasteText' })));
+      })
+    );
+
+    contextMenu.appendChild(
+      menuGroup('App', (b) => {
+        const clear = menuField('', 'checkbox');
+        const wrap = document.createElement('label');
+        wrap.className = 'menu-item menu-check';
+        wrap.appendChild(clear);
+        wrap.appendChild(document.createTextNode(' Clear state on launch'));
+        b.appendChild(wrap);
+        b.appendChild(menuItem('Launch app', () => post({ type: 'launchApp', clearState: clear.checked })));
+        b.appendChild(menuItem('Stop app', () => post({ type: 'stopApp' })));
+        b.appendChild(menuItem('Kill app', () => post({ type: 'killApp', clearState: clear.checked })));
+        b.appendChild(menuItem('Clear app state', () => post({ type: 'clearState' })));
+        b.appendChild(menuItem('Toggle dark mode', () => post({ type: 'toggleDarkMode' })));
+      })
+    );
+
+    contextMenu.appendChild(
+      menuGroup('Device', (b) => {
+        b.appendChild(menuItem('Landscape', () => post({ type: 'setOrientation', orientation: 'LANDSCAPE' })));
+        b.appendChild(menuItem('Portrait', () => post({ type: 'setOrientation', orientation: 'PORTRAIT' })));
+        b.appendChild(menuItem('Scroll', () => post({ type: 'scroll' })));
+        b.appendChild(menuItem('Toggle airplane mode', () => post({ type: 'toggleAirplaneMode' })));
+        const clip = menuField('Clipboard text...');
+        b.appendChild(clip);
+        b.appendChild(
+          menuAction('Set clipboard', () => {
+            if (!clip.value) return;
+            post({ type: 'setClipboard', text: clip.value });
+            clip.value = '';
+            hideMenu();
+          })
+        );
+      })
+    );
+
+    contextMenu.appendChild(
+      menuGroup('Capture', (b) => {
+        const shot = menuField('screenshot-name');
+        b.appendChild(shot);
+        b.appendChild(
+          menuAction('Take screenshot', () => {
+            post({ type: 'takeScreenshot', name: shot.value });
+            shot.value = '';
+            hideMenu();
+          })
+        );
+      })
+    );
+
+    const optional = menuField('', 'checkbox');
     const optWrap = document.createElement('label');
-    optWrap.className = 'menu-item menu-check';
-    optWrap.appendChild(optionalBox);
+    optWrap.className = 'menu-item menu-check menu-footer';
+    optWrap.appendChild(optional);
     optWrap.appendChild(document.createTextNode(' Record steps as optional'));
+    optional.addEventListener('change', () => post({ type: 'optional', value: optional.checked }));
     contextMenu.appendChild(optWrap);
-    optionalBox.addEventListener('change', () => post({ type: 'optional', value: optionalBox.checked }));
   }
-
   /**
    * Places the menu at the cursor, then keeps it inside the viewport. Right-clicking near
    * the right or bottom edge used to push the menu off-screen, where it was unreachable.
    * The menu must be un-hidden before measuring: display:none reports a zero-size rect.
    */
+  let menuAnchor = { x: 0, y: 0 };
+
   function showMenu(x, y) {
+    menuAnchor = { x, y };
     buildMenu();
     contextMenu.classList.remove('hidden');
     contextMenu.classList.add('show');
+    keepMenuOnScreen();
+  }
+
+  /** Re-run after the menu changes size, e.g. when a group is expanded. */
+  function keepMenuOnScreen() {
     contextMenu.style.left = '0px';
     contextMenu.style.top = '0px';
 
@@ -371,10 +571,10 @@
 
     // Prefer flipping to the left of the cursor when it would overflow; clamp as a backstop
     // so the menu stays on screen even when it is wider or taller than the panel.
-    let left = x;
-    if (x > maxLeft) left = Math.max(margin, x - menu.width);
-    let top = y;
-    if (y > maxTop) top = Math.max(margin, y - menu.height);
+    let left = menuAnchor.x;
+    if (menuAnchor.x > maxLeft) left = Math.max(margin, menuAnchor.x - menu.width);
+    let top = menuAnchor.y;
+    if (menuAnchor.y > maxTop) top = Math.max(margin, menuAnchor.y - menu.height);
 
     contextMenu.style.left = Math.max(margin, Math.min(left, Math.max(margin, maxLeft))) + 'px';
     contextMenu.style.top = Math.max(margin, Math.min(top, Math.max(margin, maxTop))) + 'px';

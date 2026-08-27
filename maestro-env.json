@@ -1,0 +1,27 @@
+{
+  "$comment": "Named variable sets for Maestro, passed as -e KEY=VALUE; reference as ${BASE_URL}. Only staging.api and api.portal hosts exist - there is no separate test API host, so test uses staging with ENV=test. Do not put credentials in this file.",
+  "environments": {
+    "$shared": {
+      "SHOW_LOGS": "true"
+    },
+    "staging": {
+      "BASE_URL": "https://staging.api.portal.myconneqt.com",
+      "ENV": "staging",
+      "APP_BUNDLE_ID": "com.conneqthealth.conneqt"
+    },
+    "prod": {
+      "BASE_URL": "https://api.portal.myconneqt.com",
+      "ENV": "prod",
+      "APP_BUNDLE_ID": "com.conneqthealth.conneqt"
+    },
+    "test": {
+      "variables": {
+        "BASE_URL": "https://staging.api.portal.myconneqt.com",
+        "ENV": "test",
+        "APP_BUNDLE_ID": "com.conneqthealth.companion.debug"
+      },
+      "includeTags": [],
+      "excludeTags": []
+    }
+  }
+}

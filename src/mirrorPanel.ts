@@ -9,10 +9,9 @@ import {
 } from './android/uiautomator';
 import { classifySwipeDirection } from './gestures';
 import { navActionSpec } from './deviceNav';
-
-interface FlowConfig {
-  appId?: string;
-}
+import { ImeState } from './android/ime';
+import { saveScreenshotBesideFlow } from './screenshotCapture';
+import { appendFlowStep, parseFlowDocument } from './flowDocument';
 
 function elementCenter(node: { bounds: { left: number; top: number; right: number; bottom: number } }): {
   x: number;
@@ -35,6 +34,8 @@ export class AndroidMirrorPanel {
   private dumping = false;
   /** Last reported hierarchy problem, so the 2.5s poll does not spam notifications. */
   private hierarchyProblem: string | undefined;
+  private imeState: ImeState = { showing: false, region: null };
+  private activeEditorSub: vscode.Disposable | undefined;
   private optional = false;
   private darkMode = false;
   private disposed = false;
@@ -42,12 +43,10 @@ export class AndroidMirrorPanel {
   public static async createOrShow(
     context: vscode.ExtensionContext,
     deviceId: string,
-    flowConfig: FlowConfig,
-    appendStep: (step: any) => Promise<void>
+    flowUri: vscode.Uri
   ): Promise<void> {
     if (AndroidMirrorPanel.current) {
-      AndroidMirrorPanel.current.flowConfig = flowConfig;
-      AndroidMirrorPanel.current.appendStep = appendStep;
+      AndroidMirrorPanel.current.setTarget(flowUri);
       AndroidMirrorPanel.current.panel.reveal(vscode.ViewColumn.Beside);
       return;
     }
@@ -57,7 +56,7 @@ export class AndroidMirrorPanel {
       vscode.ViewColumn.Beside,
       { enableScripts: true, retainContextWhenHidden: true }
     );
-    const mirror = new AndroidMirrorPanel(context, panel, deviceId, flowConfig, appendStep);
+    const mirror = new AndroidMirrorPanel(context, panel, deviceId, flowUri);
     AndroidMirrorPanel.current = mirror;
     await mirror.init();
   }
@@ -65,13 +64,20 @@ export class AndroidMirrorPanel {
   private constructor(
     private readonly context: vscode.ExtensionContext,
     panel: vscode.WebviewPanel,
-    private readonly deviceId: string,
-    private flowConfig: FlowConfig,
-    private appendStep: (step: any) => Promise<void>
+    public readonly deviceId: string,
+    private flowUri: vscode.Uri
   ) {
     this.panel = panel;
     this.panel.webview.html = this.getHtml();
     this.panel.onDidDispose(() => this.dispose());
+
+    // Follow whichever flow the user is editing. A non-flow editor (or the mirror itself
+    // taking focus) leaves the target alone rather than dropping recorded steps.
+    this.activeEditorSub = vscode.window.onDidChangeActiveTextEditor((editor) => {
+      if (editor && editor.document.fileName.endsWith('.flow.yaml')) {
+        this.setTarget(editor.document.uri);
+      }
+    });
     this.panel.webview.onDidReceiveMessage((msg) => {
       this.handleMessage(msg).catch((err) => vscode.window.showErrorMessage('Command failed: ' + err.message));
     });
@@ -88,6 +94,7 @@ export class AndroidMirrorPanel {
     } catch (err: any) {
       vscode.window.showErrorMessage(`Could not read device screen size: ${err.message}`);
     }
+    this.postTarget();
     this.startPolling();
     this.startElementPolling();
   }
@@ -126,14 +133,27 @@ export class AndroidMirrorPanel {
     }
   }
 
-  private async refreshElements(): Promise<void> {
-    if (this.dumping || !this.screenSize) return;
+  /**
+   * @param force Reload must produce a genuinely new dump. A poll tick may already be in
+   * flight, and simply returning (as the poll path does) would make the button do nothing;
+   * a forced refresh waits that dump out and then takes a fresh one.
+   */
+  private async refreshElements(force = false): Promise<void> {
+    if (!this.screenSize) return;
+    if (this.dumping) {
+      if (!force) return;
+      await this.waitForDumpToSettle();
+      if (this.disposed || !this.screenSize) return;
+    }
     this.dumping = true;
     try {
       const xml = await adb.dumpUiHierarchy(this.deviceId);
       const all = parseUiNodes(xml);
       this.allNodes = all;
       const screen = this.screenSize;
+      // The IME is a separate window and never appears in the dump, so its region is fetched
+      // alongside and sent to the webview to mask instead of mis-resolving.
+      this.imeState = await adb.getImeState(this.deviceId);
       const payload = all.map((n, i) => {
         const c = elementCenter(n);
         return {
@@ -151,7 +171,20 @@ export class AndroidMirrorPanel {
           selectable: isSelectable(n, screen)
         };
       });
-      this.panel.webview.postMessage({ type: 'elements', nodes: payload });
+      const r = this.imeState.region;
+      this.panel.webview.postMessage({
+        type: 'elements',
+        nodes: payload,
+        keyboard:
+          this.imeState.showing && r
+            ? {
+                left: r.left / screen.width,
+                top: r.top / screen.height,
+                width: (r.right - r.left) / screen.width,
+                height: (r.bottom - r.top) / screen.height
+              }
+            : null
+      });
       // Recovered - clear any standing problem banner and re-arm the one-shot notification.
       if (this.hierarchyProblem) {
         this.hierarchyProblem = undefined;
@@ -162,6 +195,24 @@ export class AndroidMirrorPanel {
     } finally {
       this.dumping = false;
     }
+  }
+
+  /**
+   * Resolves once any in-flight hierarchy dump has finished, or after `timeoutMs` so a wedged
+   * adb call cannot leave Reload waiting forever.
+   */
+  private waitForDumpToSettle(timeoutMs = 5000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    return new Promise((resolve) => {
+      const check = () => {
+        if (!this.dumping || this.disposed || Date.now() >= deadline) {
+          resolve();
+          return;
+        }
+        setTimeout(check, 50);
+      };
+      check();
+    });
   }
 
   /**
@@ -180,10 +231,34 @@ export class AndroidMirrorPanel {
   private async emit(step: any): Promise<void> {
     if (this.optional) {
       const obj = typeof step === 'string' ? { [step]: null } : step;
-      await this.appendStep({ ...obj, optional: true });
+      await this.writeStep({ ...obj, optional: true });
     } else {
-      await this.appendStep(step);
+      await this.writeStep(step);
     }
+  }
+
+  /**
+   * Resolves the target document at write time. The panel used to hold an `appendStep` closure
+   * bound to whichever document was active when it started, so opening a second flow kept
+   * recording into the first one - silently, and with no way to tell from the UI.
+   */
+  private async writeStep(step: any): Promise<void> {
+    const document = await vscode.workspace.openTextDocument(this.flowUri);
+    await appendFlowStep(document, step);
+  }
+
+  /** Repoints the mirror at another flow and tells the webview, so the target is never a guess. */
+  public setTarget(flowUri: vscode.Uri): void {
+    if (this.flowUri.toString() === flowUri.toString()) return;
+    this.flowUri = flowUri;
+    this.postTarget();
+  }
+
+  private postTarget(): void {
+    this.panel.webview.postMessage({
+      type: 'target',
+      path: vscode.workspace.asRelativePath(this.flowUri)
+    });
   }
 
   private nodeAt(elementId: number | undefined): UiNode | undefined {
@@ -271,6 +346,9 @@ export class AndroidMirrorPanel {
       case 'nav':
         await this.handleNav(msg.action);
         break;
+      case 'keyboardTap':
+        await this.handleKeyboardTap(msg.xPct, msg.yPct);
+        break;
     }
   }
 
@@ -299,9 +377,41 @@ export class AndroidMirrorPanel {
       await this.emit(spec.step);
     }
     // Every nav action changes what is on screen, so refresh the frame and hierarchy now
-    // instead of waiting out the poll interval.
+    // instead of waiting out the poll interval. Reload forces a genuinely new dump and
+    // reports the result, so the button visibly does something.
+    const isReload = action === 'reload';
+    if (isReload) {
+      this.panel.webview.postMessage({ type: 'status', text: 'Refreshing screen and elements...' });
+    }
+    await this.pushFrame();
+    await this.refreshElements(isReload);
+    if (isReload && !this.hierarchyProblem) {
+      this.panel.webview.postMessage({
+        type: 'status',
+        text: `Refreshed - ${this.allNodes.length} elements${this.imeState.showing ? ' (keyboard open)' : ''}`
+      });
+    }
+  }
+
+  /**
+   * A tap on the soft keyboard. It is sent to the device so typing works in the mirror, but
+   * nothing is recorded: the IME is not in the hierarchy, so the only honest step would be a
+   * raw coordinate that breaks on any layout or language change. Maestro represents typing
+   * with inputText, which the context menu offers.
+   */
+  private async handleKeyboardTap(xPct: number, yPct: number): Promise<void> {
+    if (!this.screenSize) return;
+    try {
+      await adb.tap(this.deviceId, xPct * this.screenSize.width, yPct * this.screenSize.height);
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`Failed to send tap to device: ${err.message}`);
+      return;
+    }
+    this.panel.webview.postMessage({
+      type: 'status',
+      text: 'Keyboard tap sent (not recorded) - use right-click > Input text to record typing.'
+    });
     void this.pushFrame();
-    void this.refreshElements();
   }
 
   private async handleRawTap(xPct: number, yPct: number): Promise<void> {
@@ -454,8 +564,19 @@ export class AndroidMirrorPanel {
     await this.emit('hideKeyboard');
   }
 
+  private get currentAppId(): string | undefined {
+    try {
+      const doc = vscode.workspace.textDocuments.find(
+        (d) => d.uri.toString() === this.flowUri.toString()
+      );
+      return doc ? parseFlowDocument(doc).config?.appId : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   private appId(): string | undefined {
-    return this.flowConfig.appId || undefined;
+    return this.currentAppId;
   }
 
   private async handleLaunchApp(clearState: boolean): Promise<void> {
@@ -531,20 +652,15 @@ export class AndroidMirrorPanel {
   }
 
   private async handleTakeScreenshot(name: string): Promise<void> {
-    const clean = (name || 'step').trim().replace(/\.png$/, '');
-    const fileName = `${clean}.png`;
+    // Saved beside the flow, not at the workspace root: Maestro resolves takeScreenshot
+    // relative to the flow file, so a workspace-root path pointed at nothing.
     try {
-      const png = await adb.screenshot(this.deviceId);
-      const folder = vscode.workspace.workspaceFolders?.[0];
-      if (folder) {
-        const dir = vscode.Uri.joinPath(folder.uri, 'assets');
-        await vscode.workspace.fs.createDirectory(dir);
-        await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(dir, fileName), png);
-      }
+      const rel = await saveScreenshotBesideFlow(this.flowUri, this.deviceId, name || 'step');
+      await this.emit({ takeScreenshot: rel });
+      this.panel.webview.postMessage({ type: 'status', text: `Saved ${rel}` });
     } catch (err: any) {
-      vscode.window.showWarningMessage(`Could not save screenshot (${err.message}) - step still recorded.`);
+      vscode.window.showErrorMessage(`Could not capture screenshot: ${err.message}`);
     }
-    await this.emit({ takeScreenshot: `assets/${fileName}` });
   }
 
   private async handleSetClipboard(text: string): Promise<void> {
@@ -631,21 +747,41 @@ export class AndroidMirrorPanel {
 </head>
 <body>
   <div id="status">Connecting to device...</div>
+  <div id="record-target">Recording into: <span id="record-target-path">-</span></div>
   <div id="hierarchy-banner" class="hidden"></div>
   <div id="mirror-body">
     <div id="stage">
       <canvas id="screen"></canvas>
       <div id="overlay"></div>
+      <div id="keyboard-mask"><span>System keyboard - not inspectable</span></div>
       <div id="selection">
         <span id="selection-badge"></span>
       </div>
     </div>
     <div id="device-nav">
-      <button type="button" data-nav="back" title="Back - records a back step">&#9665;</button>
-      <button type="button" data-nav="home" title="Home - records pressKey: home">&#9711;</button>
-      <button type="button" data-nav="recents" title="Recents - drives the device, not recorded">&#9723;</button>
+      <button type="button" class="nav-btn" data-nav="back" title="Back - records a back step" aria-label="Back">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M15.5 4.5 6.8 12l8.7 7.5z"/></svg>
+      </button>
+      <button type="button" class="nav-btn" data-nav="home" title="Home - records pressKey: home" aria-label="Home">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="7"/></svg>
+      </button>
+      <button type="button" class="nav-btn" data-nav="recents" title="Recents - drives the device, not recorded" aria-label="Recents">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="6.25" y="6.25" width="11.5" height="11.5" rx="1.5"/></svg>
+      </button>
       <span class="nav-sep"></span>
-      <button type="button" data-nav="reload" title="Reload screen and elements - not recorded">&#8635;</button>
+      <button type="button" class="nav-btn" data-nav="reload" title="Reload screen and elements - not recorded" aria-label="Reload">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4.5V9h-4.5"/></svg>
+      </button>
+      <span class="nav-sep"></span>
+      <span id="zoom-controls">
+        <button type="button" class="zoom-btn" data-zoom="out" title="Zoom out" aria-label="Zoom out">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 12h12"/></svg>
+        </button>
+        <span id="zoom-label">50%</span>
+        <button type="button" class="zoom-btn" data-zoom="in" title="Zoom in" aria-label="Zoom in">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 6v12M6 12h12"/></svg>
+        </button>
+      </span>
     </div>
   </div>
   <div id="context-menu" class="hidden"></div>
@@ -658,6 +794,7 @@ export class AndroidMirrorPanel {
     this.disposed = true;
     if (this.pollTimer) clearTimeout(this.pollTimer);
     if (this.elementTimer) clearTimeout(this.elementTimer);
+    this.activeEditorSub?.dispose();
     AndroidMirrorPanel.current = undefined;
   }
 }

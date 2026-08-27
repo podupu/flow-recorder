@@ -1,0 +1,27 @@
+{
+  "$comment": "Named variable sets for Maestro. The active one is passed as -e KEY=VALUE. Reference them in flows as ${BASE_URL}.",
+  "environments": {
+    "$shared": {
+      "USER_EMAIL": "demo@example.com"
+    },
+    "staging": {
+      "BASE_URL": "https://staging.api.portal.myconneqt.com"
+    },
+    "prod": {
+      "BASE_URL": "https://api.portal.myconneqt.com"
+    },
+    "test": {
+      "variables": {
+        "BASE_URL": "https://testing.api.portal.myconneqt.com"
+      },
+      "includeTags": [],
+      "excludeTags": []
+    },
+    "iOS": {
+      "APP_BUNDLE_ID": "com.conneqthealth.conneqt"
+    },
+    "Android": {
+      "APP_BUNDLE_ID": "com.conneqthealth.conneqt"
+    }
+  }
+}

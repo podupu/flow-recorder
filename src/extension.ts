@@ -1,8 +1,15 @@
 import * as vscode from 'vscode';
 import { FlowEditorProvider } from './flowEditorProvider';
+import { FlowLinkProvider } from './flowLinkProvider';
+import { EnvironmentController } from './envStatusBar';
+import { FlowTestController } from './flowTestController';
 import { AndroidMirrorPanel } from './mirrorPanel';
-import { appendFlowStep, parseFlowDocument } from './flowDocument';
+import { parseFlowDocument, insertFlowStepsAtLine } from './flowDocument';
+import { runApiRequest } from './recorder';
+import { buildApiSteps, parseHeaderLine } from './maestroApi';
+import { saveScreenshotBesideFlow, resolveCaptureDevice } from './screenshotCapture';
 import * as adb from './android/adb';
+import { registerMaestroFlowSchema } from './yamlSchema';
 
 /**
  * .flow.yaml files open in our CustomTextEditorProvider (a webview), and VS Code does NOT
@@ -61,8 +68,136 @@ async function getActiveFlowDocument(): Promise<vscode.TextDocument | undefined>
   return undefined;
 }
 
+/** The .flow.yaml text editor the command was invoked from. */
+function activeFlowEditor(): vscode.TextEditor | undefined {
+  const editor = vscode.window.activeTextEditor;
+  if (editor && editor.document.fileName.endsWith('.flow.yaml')) return editor;
+  vscode.window.showErrorMessage('Open a .flow.yaml file in the editor to add a step.');
+  return undefined;
+}
+
+/**
+ * Prompts for an API request, runs it once so the recorded assertion reflects a real status,
+ * and inserts official Maestro steps at the cursor. See src/maestroApi.ts for the mapping.
+ */
+async function promptAndInsertApiBlock(): Promise<void> {
+  const editor = activeFlowEditor();
+  if (!editor) return;
+
+  const method = await vscode.window.showQuickPick(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], {
+    placeHolder: 'HTTP method'
+  });
+  if (!method) return;
+
+  const url = await vscode.window.showInputBox({
+    prompt: 'Request URL',
+    placeHolder: 'https://api.example.com/endpoint',
+    validateInput: (v) => (v.trim().startsWith('http') ? undefined : 'Enter an http(s) URL')
+  });
+  if (!url) return;
+
+  let body: string | undefined;
+  if (method !== 'GET') {
+    body = await vscode.window.showInputBox({
+      prompt: 'Request body (optional)',
+      placeHolder: '{"user":"demo"}'
+    });
+  }
+
+  const headerLine = await vscode.window.showInputBox({
+    prompt: 'Headers (optional), comma-separated',
+    placeHolder: 'Content-Type: application/json, Authorization: Bearer abc'
+  });
+  const headers = parseHeaderLine(headerLine);
+
+  const result = await runApiRequest({ method, url: url.trim(), headers, body });
+  if (result.status === 0) {
+    const go = await vscode.window.showWarningMessage(
+      `Request failed: ${result.bodyPreview}. Record it anyway, asserting 200?`,
+      'Record',
+      'Cancel'
+    );
+    if (go !== 'Record') return;
+  }
+
+  const index = (parseFlowDocument(editor.document).steps || []).length + 1;
+  const built = buildApiSteps(
+    { method, url: url.trim(), headers, body: body || undefined, expectStatus: result.status || 200 },
+    { outputVar: `api${index}`, scriptName: `api-${index}` }
+  );
+  if (built.script) {
+    await writeScriptBesideFlow(editor.document.uri, built.script);
+  }
+  await insertFlowStepsAtLine(editor.document, editor.selection.active.line, built.steps);
+  vscode.window.showInformationMessage(
+    built.script ? `Added runScript + assertTrue (scripts/${built.script.fileName}).` : 'Added evalScript + assertTrue.'
+  );
+}
+
+async function writeScriptBesideFlow(
+  flowUri: vscode.Uri,
+  script: { fileName: string; contents: string }
+): Promise<void> {
+  const dir = vscode.Uri.joinPath(flowUri, '..', 'scripts');
+  await vscode.workspace.fs.createDirectory(dir);
+  await vscode.workspace.fs.writeFile(
+    vscode.Uri.joinPath(dir, script.fileName),
+    Buffer.from(script.contents, 'utf8')
+  );
+}
+
+async function promptAndInsertScreenshotBlock(): Promise<void> {
+  const editor = activeFlowEditor();
+  if (!editor) return;
+
+  const name = await vscode.window.showInputBox({
+    prompt: 'Screenshot name (saved to assets/ beside this flow)',
+    value: 'screenshot'
+  });
+  if (name === undefined) return;
+
+  const deviceId = await resolveCaptureDevice(AndroidMirrorPanel.current?.deviceId);
+  if (!deviceId) return;
+
+  try {
+    const rel = await saveScreenshotBesideFlow(editor.document.uri, deviceId, name);
+    await insertFlowStepsAtLine(editor.document, editor.selection.active.line, [{ takeScreenshot: rel }]);
+    vscode.window.showInformationMessage(`Captured ${rel}`);
+  } catch (err: any) {
+    vscode.window.showErrorMessage(`Could not capture screenshot: ${err.message}`);
+  }
+}
+
 export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(FlowEditorProvider.register(context));
+  // Make runFlow / runScript / takeScreenshot paths clickable.
+  context.subscriptions.push(FlowLinkProvider.register());
+
+  // Named variable sets, injected as `-e KEY=VALUE` when running a flow.
+  const environments = new EnvironmentController(context);
+  context.subscriptions.push(...environments.register());
+
+  // Flows appear in the Testing view with a gutter play button beside each one.
+  const flowTests = new FlowTestController(environments);
+  void flowTests.register().then((d) => context.subscriptions.push(...d));
+
+  // SchemaStore mis-matches *.flow.yaml to Estuary Flow; point it at Maestro instead.
+  void registerMaestroFlowSchema(context);
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('flowRecorder.addApiBlock', promptAndInsertApiBlock),
+    vscode.commands.registerCommand('flowRecorder.addScreenshotBlock', promptAndInsertScreenshotBlock),
+    vscode.commands.registerCommand('flowRecorder.openBlockView', async () => {
+      const editor = activeFlowEditor();
+      if (!editor) return;
+      await vscode.commands.executeCommand(
+        'vscode.openWith',
+        editor.document.uri,
+        'flowRecorder.flowEditor',
+        vscode.ViewColumn.Beside
+      );
+    })
+  );
 
   context.subscriptions.push(
     vscode.commands.registerCommand('flowRecorder.startAndroidMirror', async () => {
@@ -110,8 +245,7 @@ export function activate(context: vscode.ExtensionContext) {
         deviceId = picked.label;
       }
 
-      const config = parseFlowDocument(document).config;
-      await AndroidMirrorPanel.createOrShow(context, deviceId, config, (step) => appendFlowStep(document, step));
+      await AndroidMirrorPanel.createOrShow(context, deviceId, document.uri);
     })
   );
 }

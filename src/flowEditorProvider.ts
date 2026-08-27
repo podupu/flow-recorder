@@ -1,6 +1,9 @@
 import * as vscode from 'vscode';
-import { runApiRequest, captureScreenshotStub } from './recorder';
-import { parseFlowDocument, appendFlowStep, deleteFlowStep, updateStep } from './flowDocument';
+import { runApiRequest } from './recorder';
+import { AndroidMirrorPanel } from './mirrorPanel';
+import { saveScreenshotBesideFlow, resolveCaptureDevice } from './screenshotCapture';
+import { parseFlowDocument, appendFlowStep, deleteFlowStep, updateStep, writeFlowDocument } from './flowDocument';
+import { buildApiSteps, isLegacyApiStep, convertLegacyApiStepFull } from './maestroApi';
 
 function buildCommandStep(command: { type: string; args: Record<string, any> }): any {
   const positiveNumber = (v: any, fallback: number): number => {
@@ -51,11 +54,29 @@ export class FlowEditorProvider implements vscode.CustomTextEditorProvider {
     webviewPanel: vscode.WebviewPanel,
     _token: vscode.CancellationToken
   ): Promise<void> {
-    webviewPanel.webview.options = { enableScripts: true };
+    webviewPanel.webview.options = {
+      enableScripts: true,
+      // Screenshot thumbnails live beside the flow, outside the extension folder.
+      localResourceRoots: [this.context.extensionUri, vscode.Uri.joinPath(document.uri, '..')]
+    };
     webviewPanel.webview.html = this.getHtml(webviewPanel.webview);
 
+    // Flows written by the old scaffold contain `apiRequest:`/`response:`, which Maestro
+    // cannot replay. Convert them once, keeping a .bak alongside.
+    await this.migrateLegacyApiSteps(document);
+
     const postState = () => {
-      webviewPanel.webview.postMessage({ type: 'update', doc: parseFlowDocument(document) });
+      const doc = parseFlowDocument(document);
+      // Webviews cannot load file:// paths directly - each screenshot needs a webview URI.
+      const assets: Record<string, string> = {};
+      for (const step of doc.steps || []) {
+        const rel = step && step.takeScreenshot;
+        if (typeof rel === 'string' && !assets[rel]) {
+          const uri = vscode.Uri.joinPath(document.uri, '..', rel);
+          assets[rel] = webviewPanel.webview.asWebviewUri(uri).toString();
+        }
+      }
+      webviewPanel.webview.postMessage({ type: 'update', doc, assets });
     };
 
     // Keep the webview in sync if the file changes on disk / via text edits.
@@ -73,28 +94,44 @@ export class FlowEditorProvider implements vscode.CustomTextEditorProvider {
           break;
 
         case 'addApiBlock': {
+          // The request is run once so the recorded assertion reflects a real status, then
+          // translated into official Maestro steps (evalScript/runScript + assertTrue).
           const result = await runApiRequest(message.payload);
-          await appendFlowStep(document, {
-            apiRequest: {
+          if (result.status === 0) {
+            vscode.window.showWarningMessage(
+              `Request failed (${result.bodyPreview}) - recording it to assert 200 anyway.`
+            );
+          }
+          const index = (parseFlowDocument(document).steps || []).length + 1;
+          const built = buildApiSteps(
+            {
               method: message.payload.method,
               url: message.payload.url,
-              body: message.payload.body || undefined
+              headers: message.payload.headers,
+              body: message.payload.body || undefined,
+              expectStatus: result.status || 200
             },
-            response: {
-              status: result.status,
-              durationMs: result.durationMs,
-              body: result.bodyPreview
-            }
-          });
+            { outputVar: `api${index}`, scriptName: `api-${index}` }
+          );
+          if (built.script) {
+            await this.writeScriptBesideFlow(document.uri, built.script);
+          }
+          for (const step of built.steps) {
+            await appendFlowStep(document, step);
+          }
           break;
         }
 
         case 'addScreenshotBlock': {
-          const shot = await captureScreenshotStub();
-          await appendFlowStep(document, {
-            takeScreenshot: shot.path,
-            note: shot.note
-          });
+          // Reuse the device an open mirror is attached to; otherwise ask.
+          const deviceId = await resolveCaptureDevice(AndroidMirrorPanel.current?.deviceId);
+          if (!deviceId) break;
+          try {
+            const rel = await saveScreenshotBesideFlow(document.uri, deviceId, message.name);
+            await appendFlowStep(document, { takeScreenshot: rel });
+          } catch (err: any) {
+            vscode.window.showErrorMessage(`Could not capture screenshot: ${err.message}`);
+          }
           break;
         }
 
@@ -115,6 +152,54 @@ export class FlowEditorProvider implements vscode.CustomTextEditorProvider {
           break;
       }
     });
+  }
+
+  /** Writes a generated JavaScript file to `scripts/` beside the flow. */
+  private async writeScriptBesideFlow(
+    flowUri: vscode.Uri,
+    script: { fileName: string; contents: string }
+  ): Promise<void> {
+    const dir = vscode.Uri.joinPath(flowUri, '..', 'scripts');
+    await vscode.workspace.fs.createDirectory(dir);
+    await vscode.workspace.fs.writeFile(
+      vscode.Uri.joinPath(dir, script.fileName),
+      Buffer.from(script.contents, 'utf8')
+    );
+  }
+
+  private async migrateLegacyApiSteps(document: vscode.TextDocument): Promise<void> {
+    const parsed = parseFlowDocument(document);
+    const steps = parsed.steps || [];
+    if (!steps.some(isLegacyApiStep)) return;
+
+    const backup = vscode.Uri.file(`${document.uri.fsPath}.bak`);
+    try {
+      await vscode.workspace.fs.copy(document.uri, backup, { overwrite: true });
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`Could not back up the flow, leaving it unchanged: ${err.message}`);
+      return;
+    }
+
+    const next: any[] = [];
+    let converted = 0;
+    for (const step of steps) {
+      const result = convertLegacyApiStepFull(step, converted + 1);
+      if (result) {
+        if (result.script) {
+          await this.writeScriptBesideFlow(document.uri, result.script);
+        }
+        next.push(...result.steps);
+        converted += 1;
+      } else {
+        next.push(step);
+      }
+    }
+
+    await writeFlowDocument(document, { config: parsed.config, steps: next });
+    vscode.window.showInformationMessage(
+      `Converted ${converted} apiRequest block${converted === 1 ? '' : 's'} to official Maestro steps. ` +
+        `Backup saved as ${vscode.workspace.asRelativePath(backup)}.`
+    );
   }
 
   private getHtml(webview: vscode.Webview): string {

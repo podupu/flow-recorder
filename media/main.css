@@ -173,3 +173,40 @@ button.secondary:hover {
   font-size: 13px;
   opacity: 0.7;
 }
+
+.screenshot-thumb {
+  display: block;
+  max-width: 220px;
+  max-height: 340px;
+  width: auto;
+  height: auto;
+  margin: 6px 0;
+  border: 1px solid var(--vscode-editorWidget-border, #444);
+  border-radius: 4px;
+  background: var(--vscode-editor-background);
+}
+
+.screenshot-missing {
+  margin: 6px 0;
+  padding: 6px 8px;
+  font-size: 11px;
+  border-radius: 4px;
+  border: 1px dashed var(--vscode-inputValidation-warningBorder, #c9a227);
+  color: var(--vscode-descriptionForeground, #bbb);
+}
+
+.block-script .block-body,
+.block-assert .block-body {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.block-invalid {
+  border-left: 3px solid var(--vscode-inputValidation-warningBorder, #c9a227);
+}
+
+.block-invalid-note {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, #bbb);
+}

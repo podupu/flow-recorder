@@ -1,7 +1,14 @@
 {
   "yaml.schemas": {
-    "none": [
-      "*.flow.yaml"
+    "https://www.schemastore.org/maestro-flow.json": [
+      "*.flow.yaml",
+      "*.flow.yml",
+      ".maestro/**/*.yaml"
     ]
+  },
+  "[yaml]": {
+    "editor.tabSize": 2,
+    "editor.insertSpaces": true,
+    "editor.detectIndentation": false
   }
 }

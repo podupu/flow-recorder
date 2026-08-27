@@ -7,6 +7,7 @@ import {
   parseAutomationDrivers,
   HierarchyUnavailableError
 } from './hierarchy';
+import { parseImeState, ImeState } from './ime';
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -145,6 +146,19 @@ export async function getScreenSize(deviceId: string): Promise<{ width: number; 
  * unaffected by scoped storage - unlike /sdcard, which is a symlink into managed storage.
  */
 const REMOTE_DUMP_PATH = '/data/local/tmp/flow-recorder-dump.xml';
+
+/**
+ * Current soft-keyboard state. The IME is a separate window that `uiautomator dump` never
+ * includes, so the panel needs its region to avoid resolving taps to the app view behind it.
+ */
+export async function getImeState(deviceId: string): Promise<ImeState> {
+  try {
+    const out = await execAdb(['-s', deviceId, 'shell', 'dumpsys', 'input_method']);
+    return parseImeState(out.toString('utf8'));
+  } catch {
+    return { showing: false, region: null };
+  }
+}
 
 /** Automation drivers currently running, which hold UiAutomation and block `uiautomator dump`. */
 export async function getRunningAutomationDrivers(deviceId: string): Promise<string[]> {
