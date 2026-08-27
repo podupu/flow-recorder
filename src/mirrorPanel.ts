@@ -577,7 +577,7 @@ export class AndroidMirrorPanel {
       <button id="doInput">Input</button>
       <input id="eraseCount" type="number" value="50" min="1" max="100" />
       <button id="doErase">Erase</button>
-      <button data-action="pressKey" data-key="back">Back</button>
+      <button data-action="pressKey" data-key="back">Back key</button>
       <button data-action="back">Back</button>
       <button data-action="pressKey" data-key="home">Home</button>
       <button data-action="pressKey" data-key="enter">Enter</button>
