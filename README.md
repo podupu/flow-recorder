@@ -63,9 +63,27 @@ Android Mirror** (Command Palette).
 
 **What's real vs. what's next**
 
-- `src/android/adb.ts`, `src/android/uiautomator.ts`, `src/mirrorPanel.ts`
-  are fully implemented and compile clean - screenshots, tap injection,
-  and hierarchy-based selector resolution are real, not stubs.
+- The mirror shows the real device screen with **highlight boxes drawn
+  over selectable elements** on load; hovering a box brightens it and
+  shows its selector in a tooltip. Recording a gesture is as easy as
+  interacting with the mirrored screen: **tap** (the hovered element's
+  selector, or `point: "x%,y%"` for empty space), **long press**,
+  **double tap**, and **swipe**.
+- The mirror toolbar drives device actions from the editor: **text
+  input** and **erase**; keys (Back/Home/Enter, hide keyboard);
+  **orientation** (landscape/portrait); **app lifecycle** (launch/stop/
+  kill, clear state); **clipboard** (set/paste); **network** (airplane
+  mode); **dark mode**; **screenshot** (saves a PNG to `assets/`);
+  **scroll**; and **asserts** (visible/not visible on the hovered
+  element). An "optional" checkbox stamps new steps with
+  `optional: true`.
+- The editor toolbar has a **+ Command** menu that appends typed Maestro
+  commands (`assertVisible`, `assertNotVisible`, `waitForAnimationToEnd`,
+  `extendedWaitUntil`, `openLink`, `runFlow`, `copyTextFrom`), and each
+  block's "optional" toggle round-trips with the YAML on disk.
+- These device-facing pieces are implemented and compile clean, but they
+  still need **manual on-device verification** against a real
+  emulator/device before they're relied on in a recording.
 - The live view uses **polled screenshots**, not real-time video. This was
   the deliberate, verified-reliable choice for this pass - it doesn't
   depend on any binary wire protocol, so there's nothing that can silently
