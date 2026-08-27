@@ -61,6 +61,16 @@
         body.innerHTML = `<div class="block-title">${escapeHtml(JSON.stringify(step))}</div>`;
       }
 
+      const optWrap = document.createElement('label');
+      optWrap.className = 'opt-toggle';
+      const optBox = document.createElement('input');
+      optBox.type = 'checkbox';
+      optBox.checked = !!step.optional;
+      optBox.onchange = () => vscode.postMessage({ type: 'setOptional', index, optional: optBox.checked });
+      optWrap.appendChild(optBox);
+      optWrap.appendChild(document.createTextNode(' optional'));
+      card.appendChild(optWrap);
+
       card.appendChild(body);
       blocksEl.appendChild(card);
     });
@@ -115,6 +125,70 @@
 
   document.getElementById('addScreenshot').addEventListener('click', () => {
     vscode.postMessage({ type: 'addScreenshotBlock' });
+  });
+
+  const commandForm = document.getElementById('commandForm');
+  const commandType = document.getElementById('commandType');
+  const commandFields = document.getElementById('commandFields');
+  const commandSubmit = document.getElementById('commandSubmit');
+
+  const FIELD_SPECS = {
+    assertVisible: [{ id: 'selector', label: 'Text or selector', type: 'text' }],
+    assertNotVisible: [{ id: 'selector', label: 'Text or selector', type: 'text' }],
+    waitForAnimationToEnd: [{ id: 'timeout', label: 'Timeout (ms)', type: 'number', value: 5000 }],
+    extendedWaitUntil: [
+      { id: 'selector', label: 'Visible text', type: 'text' },
+      { id: 'timeout', label: 'Timeout (ms)', type: 'number', value: 120000 }
+    ],
+    openLink: [{ id: 'uri', label: 'Link / URI', type: 'text' }],
+    runFlow: [{ id: 'path', label: 'Flow file path', type: 'text' }],
+    copyTextFrom: [
+      { id: 'selector', label: 'Element text', type: 'text' },
+      { id: 'toVar', label: 'Variable name', type: 'text' }
+    ]
+  };
+
+  function renderCommandFields() {
+    commandFields.innerHTML = '';
+    const specs = FIELD_SPECS[commandType.value] || [];
+    specs.forEach((spec) => {
+      const row = document.createElement('div');
+      row.className = 'form-row';
+      const label = document.createElement('label');
+      label.textContent = spec.label;
+      const input = document.createElement('input');
+      input.type = spec.type || 'text';
+      input.id = 'cmd-' + spec.id;
+      input.value = spec.value !== undefined ? spec.value : '';
+      row.appendChild(label);
+      row.appendChild(input);
+      commandFields.appendChild(row);
+    });
+  }
+
+  document.getElementById('addCommandBtn').addEventListener('click', () => {
+    commandForm.classList.remove('hidden');
+    renderCommandFields();
+    commandType.focus();
+  });
+
+  document.getElementById('commandCancel').addEventListener('click', () => {
+    commandForm.classList.add('hidden');
+  });
+
+  commandType.addEventListener('change', renderCommandFields);
+
+  commandSubmit.addEventListener('click', () => {
+    const args = {};
+    const specs = FIELD_SPECS[commandType.value] || [];
+    specs.forEach((spec) => {
+      args[spec.id] = document.getElementById('cmd-' + spec.id).value;
+    });
+    vscode.postMessage({
+      type: 'addCommand',
+      command: { type: commandType.value, args }
+    });
+    commandForm.classList.add('hidden');
   });
 
   vscode.postMessage({ type: 'ready' });

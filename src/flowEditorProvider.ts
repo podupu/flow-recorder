@@ -1,6 +1,36 @@
 import * as vscode from 'vscode';
 import { runApiRequest, captureScreenshotStub } from './recorder';
-import { parseFlowDocument, appendFlowStep, deleteFlowStep } from './flowDocument';
+import { parseFlowDocument, appendFlowStep, deleteFlowStep, updateStep } from './flowDocument';
+
+function buildCommandStep(command: { type: string; args: Record<string, any> }): any {
+  const positiveNumber = (v: any, fallback: number): number => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : fallback;
+  };
+  switch (command.type) {
+    case 'assertVisible':
+      return { assertVisible: { text: command.args.selector } };
+    case 'assertNotVisible':
+      return { assertNotVisible: { text: command.args.selector } };
+    case 'waitForAnimationToEnd':
+      return { waitForAnimationToEnd: { timeout: positiveNumber(command.args.timeout, 5000) } };
+    case 'extendedWaitUntil':
+      return {
+        extendedWaitUntil: {
+          visible: command.args.selector,
+          timeout: positiveNumber(command.args.timeout, 120000)
+        }
+      };
+    case 'openLink':
+      return { openLink: command.args.uri };
+    case 'runFlow':
+      return { runFlow: command.args.path };
+    case 'copyTextFrom':
+      return { copyTextFrom: { text: command.args.selector, to: command.args.toVar } };
+    default:
+      return undefined;
+  }
+}
 
 export class FlowEditorProvider implements vscode.CustomTextEditorProvider {
   private static readonly viewType = 'flowRecorder.flowEditor';
@@ -71,6 +101,16 @@ export class FlowEditorProvider implements vscode.CustomTextEditorProvider {
         case 'deleteStep':
           await deleteFlowStep(document, message.index);
           break;
+
+        case 'addCommand': {
+          const step = buildCommandStep(message.command);
+          if (step) await appendFlowStep(document, step);
+          break;
+        }
+
+        case 'setOptional':
+          await updateStep(document, message.index, { optional: message.optional });
+          break;
       }
     });
   }
@@ -92,6 +132,7 @@ export class FlowEditorProvider implements vscode.CustomTextEditorProvider {
   <div id="toolbar">
     <button id="addApi">+ API block</button>
     <button id="addScreenshot">+ Screenshot block</button>
+    <button id="addCommandBtn">+ Command</button>
   </div>
 
   <div id="apiForm" class="hidden">
@@ -109,6 +150,25 @@ export class FlowEditorProvider implements vscode.CustomTextEditorProvider {
     <div class="form-row form-actions">
       <button id="apiCancel" class="secondary">Cancel</button>
       <button id="apiSubmit">Run request</button>
+    </div>
+  </div>
+
+  <div id="commandForm" class="hidden">
+    <div class="form-row">
+      <select id="commandType">
+        <option value="assertVisible">assertVisible</option>
+        <option value="assertNotVisible">assertNotVisible</option>
+        <option value="waitForAnimationToEnd">waitForAnimationToEnd</option>
+        <option value="extendedWaitUntil">extendedWaitUntil</option>
+        <option value="openLink">openLink</option>
+        <option value="runFlow">runFlow</option>
+        <option value="copyTextFrom">copyTextFrom</option>
+      </select>
+    </div>
+    <div id="commandFields"></div>
+    <div class="form-row form-actions">
+      <button id="commandCancel" class="secondary">Cancel</button>
+      <button id="commandSubmit">Add</button>
     </div>
   </div>
 

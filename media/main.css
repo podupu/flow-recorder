@@ -151,3 +151,19 @@ button.secondary:hover {
 .delete-btn:hover {
   background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.2));
 }
+
+.opt-toggle {
+  position: absolute;
+  top: 6px;
+  right: 26px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, #bbb);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#commandForm input {
+  flex: 1;
+  min-width: 0;
+}
