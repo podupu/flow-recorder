@@ -45,3 +45,93 @@ canvas {
     opacity: 0;
   }
 }
+
+#stage {
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+#overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.element-box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid rgba(56, 138, 221, 0);
+  transition: border-color 0.08s ease, background-color 0.08s ease;
+}
+
+.element-box.hover {
+  border-color: #388add;
+  background: rgba(56, 138, 221, 0.12);
+}
+
+#tooltip {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: none;
+  background: var(--vscode-editorWidget-background, #252526);
+  color: var(--vscode-foreground);
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 3px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  max-width: 80%;
+  word-break: break-all;
+  z-index: 10;
+}
+
+#tooltip.show {
+  display: block;
+}
+
+#mirror-toolbar {
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-bottom: 1px solid var(--vscode-panel-border, #444);
+}
+
+#mirror-toolbar .row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+#mirror-toolbar input[type="text"],
+#mirror-toolbar input[type="number"] {
+  background: var(--vscode-input-background, #3c3c3c);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border, #444);
+  padding: 3px 6px;
+  font-size: 12px;
+  width: auto;
+}
+
+#mirror-toolbar input#inputText {
+  width: 160px;
+}
+
+#mirror-toolbar input#eraseCount {
+  width: 56px;
+}
+
+#mirror-toolbar button {
+  font-size: 12px;
+  padding: 3px 8px;
+}
+
+#mirror-toolbar .opt {
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
