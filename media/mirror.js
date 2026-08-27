@@ -201,6 +201,7 @@
   let gesture = null;
 
   canvas.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
     if (!frameLoaded) return;
     const p = toPct(e.clientX, e.clientY);
     gesture = { start: p, last: p, held: false, moved: false, startTime: Date.now() };
