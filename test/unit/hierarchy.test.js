@@ -2,6 +2,7 @@ const assert = require('assert');
 const {
   looksLikeHierarchyXml,
   parseAccessibilityServices,
+  parseAutomationDrivers,
   classifyDumpFailure,
   formatHierarchyError,
   HierarchyUnavailableError
@@ -72,7 +73,40 @@ describe('dump failure classification', () => {
   });
 });
 
+describe('automation driver detection', () => {
+  it('finds a leaked Maestro driver in ps output', () => {
+    const ps = [
+      'USER  PID  PPID  VSZ  RSS  WCHAN  ADDR S NAME',
+      'u0_a219  20496  460  16709620  53956 0  0 S dev.mobile.maestro',
+      'u0_a10  1234  460  100 100 0 0 S com.android.systemui'
+    ].join('\n');
+    assert.deepStrictEqual(parseAutomationDrivers(ps), ['dev.mobile.maestro']);
+  });
+
+  it('finds appium uiautomator2 server', () => {
+    const ps = 'u0_a1 1 1 1 1 0 0 S io.appium.uiautomator2.server.test';
+    assert.deepStrictEqual(parseAutomationDrivers(ps), ['io.appium.uiautomator2.server.test']);
+  });
+
+  it('returns nothing when no driver is running', () => {
+    assert.deepStrictEqual(parseAutomationDrivers('u0_a1 1 1 1 1 0 0 S com.android.systemui'), []);
+    assert.deepStrictEqual(parseAutomationDrivers(''), []);
+  });
+
+  it('does not report the same driver twice', () => {
+    const ps = 'u0 1 1 1 1 0 0 S dev.mobile.maestro\nu0 2 1 1 1 0 0 S dev.mobile.maestro';
+    assert.deepStrictEqual(parseAutomationDrivers(ps), ['dev.mobile.maestro']);
+  });
+});
+
 describe('actionable error messages', () => {
+  it('names a running automation driver ahead of accessibility services', () => {
+    // The real Pixel_9 failure: no a11y service, a leaked Maestro driver holding UiAutomation.
+    const msg = formatHierarchyError('uiautomation-conflict', [], ['dev.mobile.maestro']);
+    assert.ok(msg.includes('dev.mobile.maestro'), 'should name the driver');
+    assert.ok(/force-stop/i.test(msg), 'should say how to clear it');
+  });
+
   it('names the blocking accessibility service', () => {
     const msg = formatHierarchyError('uiautomation-conflict', ['com.mahoraga.portal']);
     assert.ok(msg.includes('com.mahoraga.portal'), 'should name the blocking package');

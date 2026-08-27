@@ -641,8 +641,8 @@ export class AndroidMirrorPanel {
       </div>
     </div>
     <div id="device-nav">
-      <button type="button" data-nav="back" title="Back - records `back`">&#9665;</button>
-      <button type="button" data-nav="home" title="Home - records `pressKey: home`">&#9711;</button>
+      <button type="button" data-nav="back" title="Back - records a back step">&#9665;</button>
+      <button type="button" data-nav="home" title="Home - records pressKey: home">&#9711;</button>
       <button type="button" data-nav="recents" title="Recents - drives the device, not recorded">&#9723;</button>
       <span class="nav-sep"></span>
       <button type="button" data-nav="reload" title="Reload screen and elements - not recorded">&#8635;</button>

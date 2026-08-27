@@ -4,6 +4,7 @@ import {
   classifyDumpFailure,
   looksLikeHierarchyXml,
   parseAccessibilityServices,
+  parseAutomationDrivers,
   HierarchyUnavailableError
 } from './hierarchy';
 
@@ -145,6 +146,16 @@ export async function getScreenSize(deviceId: string): Promise<{ width: number; 
  */
 const REMOTE_DUMP_PATH = '/data/local/tmp/flow-recorder-dump.xml';
 
+/** Automation drivers currently running, which hold UiAutomation and block `uiautomator dump`. */
+export async function getRunningAutomationDrivers(deviceId: string): Promise<string[]> {
+  try {
+    const out = await execAdb(['-s', deviceId, 'shell', 'ps', '-A']);
+    return parseAutomationDrivers(out.toString('utf8'));
+  } catch {
+    return [];
+  }
+}
+
 /** Packages whose accessibility services are currently enabled, for diagnosing dump conflicts. */
 export async function getEnabledAccessibilityServices(deviceId: string): Promise<string[]> {
   try {
@@ -187,7 +198,11 @@ export async function dumpUiHierarchy(deviceId: string): Promise<string> {
 
   const dumpFailure = classifyDumpFailure(dumpText, rc);
   if (dumpFailure) {
-    throw new HierarchyUnavailableError(dumpFailure, await getEnabledAccessibilityServices(deviceId));
+    throw new HierarchyUnavailableError(
+      dumpFailure,
+      await getEnabledAccessibilityServices(deviceId),
+      await getRunningAutomationDrivers(deviceId)
+    );
   }
 
   // `adb exec-out cat` on a missing file writes its error to STDOUT and still exits 0,
@@ -196,7 +211,11 @@ export async function dumpUiHierarchy(deviceId: string): Promise<string> {
   const xml = out.toString('utf8');
   if (!looksLikeHierarchyXml(xml)) {
     const reason = classifyDumpFailure(xml, 0) || 'unknown';
-    throw new HierarchyUnavailableError(reason, await getEnabledAccessibilityServices(deviceId));
+    throw new HierarchyUnavailableError(
+      reason,
+      await getEnabledAccessibilityServices(deviceId),
+      await getRunningAutomationDrivers(deviceId)
+    );
   }
   return xml;
 }

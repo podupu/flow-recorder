@@ -59,12 +59,45 @@ export function classifyDumpFailure(output: string, exitCode: number): Hierarchy
   return null;
 }
 
-export function formatHierarchyError(reason: HierarchyFailureReason, blockingServices: string[] = []): string {
+/**
+ * Test-automation drivers that register their own UiAutomation. These routinely outlive the
+ * session that started them, and a leaked one blocks `uiautomator dump` until it is stopped.
+ */
+const DRIVER_PREFIXES = ['dev.mobile.maestro', 'io.appium.uiautomator2.server'];
+
+/** Extracts running automation-driver package names from `adb shell ps -A` output. */
+export function parseAutomationDrivers(psOutput: string): string[] {
+  const found: string[] = [];
+  for (const line of (psOutput || '').split('\n')) {
+    const name = line.trim().split(/\s+/).pop();
+    if (!name) continue;
+    if (DRIVER_PREFIXES.some((p) => name.startsWith(p)) && !found.includes(name)) {
+      found.push(name);
+    }
+  }
+  return found;
+}
+
+export function formatHierarchyError(
+  reason: HierarchyFailureReason,
+  blockingServices: string[] = [],
+  drivers: string[] = []
+): string {
   switch (reason) {
     case 'uiautomation-conflict': {
       const base =
         'Element detection is unavailable: another app holds the device UiAutomation connection, ' +
         'so `uiautomator dump` is being killed before it can run.';
+      // A leaked driver is both the more common cause and the easier one to clear, so it is
+      // named first when both are present.
+      if (drivers.length) {
+        const names = drivers.join(', ');
+        const stop = drivers.map((d) => `adb shell am force-stop ${d}`).join(' && ');
+        return (
+          `${base} The automation driver ${names} is still running - force-stop it ` +
+          `(\`${stop}\`) to enable hover and element outlines.`
+        );
+      }
       if (blockingServices.length) {
         const names = blockingServices.join(', ');
         return (
@@ -87,11 +120,13 @@ export function formatHierarchyError(reason: HierarchyFailureReason, blockingSer
 export class HierarchyUnavailableError extends Error {
   public readonly reason: HierarchyFailureReason;
   public readonly blockingServices: string[];
+  public readonly drivers: string[];
 
-  constructor(reason: HierarchyFailureReason, blockingServices: string[] = []) {
-    super(formatHierarchyError(reason, blockingServices));
+  constructor(reason: HierarchyFailureReason, blockingServices: string[] = [], drivers: string[] = []) {
+    super(formatHierarchyError(reason, blockingServices, drivers));
     this.name = 'HierarchyUnavailableError';
     this.reason = reason;
     this.blockingServices = blockingServices;
+    this.drivers = drivers;
   }
 }
