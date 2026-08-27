@@ -150,6 +150,7 @@
   }
 
   function renderTooltip(e) {
+    const stack = document.getElementById('overlap-stack');
     tooltip.innerHTML = '';
     const title = document.createElement('div');
     title.className = 'tooltip-title';
@@ -162,7 +163,6 @@
     const pctW = Math.round(e.width * 100);
     const pctH = Math.round(e.height * 100);
     tooltip.appendChild(tooltipRow('bounds', e.left * 100 + '%,' + e.top * 100 + '% ' + pctW + 'x' + pctH));
-    const stack = document.getElementById('overlap-stack');
     if (stack) tooltip.appendChild(stack);
   }
 
