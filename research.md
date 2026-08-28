@@ -72,3 +72,29 @@
 - getevent-based touch capture generally needs root and coordinate scaling; avoid it in favor of webview-side capture.
 - Bundling binaries raises extension size and per-OS packaging complexity.
 - The exact open-source Studio endpoint path strings (e.g., `/api/device-screen`, `/api/hierarchy`, `/api/interact`) could not be verbatim-confirmed from source in this research; the class `DeviceScreenService`, the Ktor framework, and port 9999 are confirmed, but if you ever do reverse-engineer them, read them from a pinned pre-2.6.0 tag of `mobile-dev-inc/Maestro` (module `maestro-studio/server`, package `maestro.studio`).
+
+
+Your code CLI isn't on PATH, so the commands below use the full path.
+
+Build and install
+cd /Users/aeediga/Downloads/flow-recorder && npm run compile && npx @vscode/vsce package --allow-missing-repository && "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" --install-extension flow-recorder-0.1.0.vsix --force
+
+Reload VS Code afterwards (Cmd+Shift+P → Developer: Reload Window).
+
+Individual steps
+
+Compile TypeScript:
+
+cd /Users/aeediga/Downloads/flow-recorder && npm run compile
+
+Package the .vsix:
+
+cd /Users/aeediga/Downloads/flow-recorder && npx @vscode/vsce package --allow-missing-repository
+
+Install it:
+
+"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" --install-extension /Users/aeediga/Downloads/flow-recorder/flow-recorder-0.1.0.vsix --force
+
+Uninstall:
+
+"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" --uninstall-extension podupu.flow-recorder

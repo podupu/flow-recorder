@@ -111,6 +111,51 @@ canvas {
 }
 
 /*
+ * "Show all elements" mode - every selectable element outlined and numbered at once, like
+ * Maestro Studio's inspector, rather than only the one under the cursor. Reuses #ff9800, the
+ * same orange already used for the single-hover selection outline, so the two modes read as
+ * one visual language rather than introducing a second accent colour.
+ *
+ * Declared BEFORE .element-box.hover so hover still wins when both classes are present -
+ * the element you are about to tap should read as distinct from the rest of the inspector.
+ */
+.element-box.show-all {
+  border-color: rgba(255, 152, 0, 0.85);
+}
+
+/*
+ * Sits just INSIDE the box's top-RIGHT corner.
+ *
+ * Two earlier placements were wrong for concrete reasons. Straddling the corner with
+ * translate(45%, -45%) put the badge outside the box, and for any element flush with the top
+ * of the screen that lands outside #stage, where #mirror-body's `overflow: auto` clips it
+ * away. Moving it inside fixed the clipping but parked it on top-left, directly over the
+ * content: every text field read "First N[1]ame" because a placeholder starts at the left
+ * edge. Inside-right keeps the number always visible AND clear of left-aligned text.
+ */
+.element-badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-width: 12px;
+  padding: 0 3px;
+  border-radius: 0 0 0 3px;
+  background: #ff9800;
+  color: #000;
+  font-family: var(--vscode-font-family);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.5;
+  text-align: center;
+  pointer-events: none;
+}
+
+.element-box.hover .element-badge {
+  background: #388add;
+  color: #fff;
+}
+
+/*
  * The IME lives in its own window, which `uiautomator dump` never serialises. Shading it makes
  * the absence of element outlines there read as intentional rather than broken. It must not
  * take pointer events - taps still need to reach the canvas to be forwarded to the device.
@@ -220,6 +265,11 @@ canvas {
   width: 24px;
   height: 24px;
   opacity: 0.85;
+}
+
+#show-all-btn[aria-pressed="true"] {
+  background: rgba(255, 152, 0, 0.22);
+  color: #ff9800;
 }
 
 #device-nav button svg {
@@ -431,4 +481,36 @@ canvas {
 .menu-group-body input[type="number"] {
   margin-left: 22px;
   width: calc(100% - 31px);
+}
+
+/*
+ * Diagnostic readout in the nav bar. Deliberately plain and quiet - it is there to make the
+ * overlay's state observable at a glance, not to compete with the controls beside it.
+ */
+#element-count {
+  font-size: 11px;
+  opacity: 0.75;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * Informational, not a warning: the tree was read correctly and part of the app simply is not
+ * in it. Styled quieter than #hierarchy-banner so the two never read as the same severity -
+ * one is a failure to fix here, the other a finding to fix in the app.
+ */
+#coverage-note {
+  margin: 8px;
+  padding: 7px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  border-radius: 4px;
+  border-left: 3px solid var(--vscode-textLink-foreground, #4daafc);
+  background: var(--vscode-textBlockQuote-background, rgba(128, 128, 128, 0.12));
+  color: var(--vscode-foreground);
+  opacity: 0.9;
+}
+
+#coverage-note.hidden {
+  display: none;
 }

@@ -1,4 +1,7 @@
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
+import * as os from 'os';
+import * as path from 'path';
+import * as fs from 'fs';
 import { ERASE_MAX } from '../gestures';
 import {
   classifyDumpFailure,
@@ -281,12 +284,35 @@ export async function pasteText(deviceId: string): Promise<void> {
   await execAdb(['-s', deviceId, 'shell', 'input', 'keyevent', '279']);
 }
 
+/** Third-party packages; -3 excludes the hundreds of system ones. */
+export async function listPackages(deviceId: string): Promise<string> {
+  const out = await execAdb(['-s', deviceId, 'shell', 'pm', 'list', 'packages', '-3']);
+  return out.toString('utf8');
+}
+
 export async function launchApp(deviceId: string, appId: string): Promise<void> {
   await execAdb(['-s', deviceId, 'shell', 'monkey', '-p', appId, '-c', 'android.intent.category.LAUNCHER', '1']);
 }
 
 export async function stopApp(deviceId: string, appId: string): Promise<void> {
   await execAdb(['-s', deviceId, 'shell', 'am', 'force-stop', appId]);
+}
+
+/**
+ * Force-stops every currently running automation driver (a leaked Maestro or Appium process
+ * holding UiAutomation), so element detection can recover without the user having to run adb
+ * by hand. Returns the packages actually stopped.
+ */
+export async function killAutomationDrivers(deviceId: string): Promise<string[]> {
+  const drivers = await getRunningAutomationDrivers(deviceId);
+  for (const driver of drivers) {
+    try {
+      await stopApp(deviceId, driver);
+    } catch {
+      // Best-effort - a driver that refuses to stop is reported by the caller, not thrown here.
+    }
+  }
+  return drivers;
 }
 
 export async function killApp(deviceId: string, appId: string, shouldClearState: boolean): Promise<void> {
@@ -329,4 +355,36 @@ export async function scroll(deviceId: string): Promise<void> {
   const yFrom = Math.round(size.height * 0.8);
   const yTo = Math.round(size.height * 0.2);
   await execAdb(['-s', deviceId, 'shell', 'input', 'swipe', String(x), String(yFrom), String(x), String(yTo), '300']);
+}
+
+/** Installed Android AVDs, so a stopped emulator can be offered and booted on demand. */
+export async function listAvds(): Promise<string[]> {
+  const home = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT ||
+    path.join(os.homedir(), 'Library', 'Android', 'sdk');
+  const candidates = [path.join(home, 'emulator', 'emulator'), 'emulator'];
+  for (const bin of candidates) {
+    try {
+      const out = await new Promise<string>((resolve, reject) => {
+        execFile(bin, ['-list-avds'], { timeout: 15000 }, (err, stdout) =>
+          err ? reject(err) : resolve(stdout)
+        );
+      });
+      return out.split('\n').map((l) => l.trim()).filter((l) => l && !l.includes(' '));
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return [];
+}
+
+/** Boots an AVD detached - the emulator process must outlive this call. */
+export function bootAvd(name: string): void {
+  const home = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT ||
+    path.join(os.homedir(), 'Library', 'Android', 'sdk');
+  const bin = path.join(home, 'emulator', 'emulator');
+  const child = spawn(fs.existsSync(bin) ? bin : 'emulator', ['-avd', name], {
+    detached: true,
+    stdio: 'ignore'
+  });
+  child.unref();
 }

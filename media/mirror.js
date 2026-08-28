@@ -12,6 +12,9 @@
   let keyboard = null;
   let hoveredElement = null;
   let lastTapTime = 0;
+  // "Show all elements" mode - every selectable element outlined and numbered at once, like
+  // Maestro Studio's inspector, rather than only the one under the cursor.
+  let showAllElements = false;
 
   img.onload = () => {
     canvas.width = img.naturalWidth;
@@ -30,6 +33,7 @@
       keyboard = msg.keyboard || null;
       renderKeyboardMask();
       renderOverlay();
+      showCoverageNote(msg.coverageNote);
     } else if (msg.type === 'status') {
       showStatus(msg.text);
     } else if (msg.type === 'hierarchyError') {
@@ -41,6 +45,23 @@
       if (el) el.textContent = msg.path;
     }
   });
+
+  /**
+   * Regions the app hides from accessibility. Deliberately separate from the hierarchy banner:
+   * that one reports OUR failure to read the tree, this reports a tree that was read fine and
+   * genuinely has nothing in part of it. The fix for each lives in a different codebase.
+   */
+  function showCoverageNote(text) {
+    const note = document.getElementById('coverage-note');
+    if (!note) return;
+    if (!text) {
+      note.classList.add('hidden');
+      note.textContent = '';
+      return;
+    }
+    note.textContent = text;
+    note.classList.remove('hidden');
+  }
 
   // Element detection failing used to look identical to "this screen has no elements".
   // The banner keeps the real reason on screen until the dump succeeds again.
@@ -113,20 +134,95 @@
     return best;
   }
 
+  /**
+   * Row-by-row, left-to-right ordering for the "show all" badge numbers - matches how a person
+   * reads the screen rather than the raw hierarchy order, which can jump around unpredictably.
+   * Kept identical to src/readingOrder.ts (unit tested there); this webview sandbox cannot
+   * `require` extension-host code, so the same small algorithm is duplicated here - the same
+   * pattern already used for hit-testing between mirrorPanel.ts and this file.
+   */
+  function sortByReadingOrder(els) {
+    const ROW_OVERLAP_THRESHOLD = 0.5;
+    function verticalOverlap(a, b) {
+      const aBottom = a.top + a.height;
+      const bBottom = b.top + b.height;
+      const overlap = Math.min(aBottom, bBottom) - Math.max(a.top, b.top);
+      if (overlap <= 0) return 0;
+      return overlap / Math.min(a.height, b.height);
+    }
+    const byTop = els.slice().sort((a, b) => a.top - b.top);
+    const rows = [];
+    for (const element of byTop) {
+      const row = rows[rows.length - 1];
+      const joins = row && row.some((existing) => verticalOverlap(existing, element) >= ROW_OVERLAP_THRESHOLD);
+      if (joins) row.push(element);
+      else rows.push([element]);
+    }
+    const out = [];
+    for (const row of rows) {
+      row.sort((a, b) => a.left - b.left);
+      out.push(...row);
+    }
+    return out;
+  }
+
+  /**
+   * `selectable` is calibrated for choosing a TAP TARGET: it requires a label, because tapping
+   * an unlabelled container would record a useless point selector. Maestro Studio's "show all"
+   * inspector is a different question - "what is on this screen at all" - and answers it for
+   * images, headings and containers with no label just as much as buttons. So show-all uses
+   * its own, much looser filter: everything with real geometry, excluding only the one giant
+   * box that would otherwise wrap the entire screen and swallow everything inside it.
+   */
+  function nearFullscreen(e) {
+    return e.width * e.height > 0.9;
+  }
+
   function renderOverlay() {
     overlay.innerHTML = '';
-    for (const e of elements) {
-      if (!e.selectable) continue;
+    const shown = showAllElements ? elements.filter((e) => !nearFullscreen(e)) : elements.filter((e) => e.selectable);
+
+    const numberOf = new Map();
+    if (showAllElements) {
+      sortByReadingOrder(shown).forEach((e, i) => numberOf.set(e.elementId, i + 1));
+    }
+
+    for (const e of shown) {
       const box = document.createElement('div');
-      box.className = 'element-box';
+      box.className = 'element-box' + (showAllElements ? ' show-all' : '');
       box.dataset.id = e.elementId;
       box.style.left = e.left * 100 + '%';
       box.style.top = e.top * 100 + '%';
       box.style.width = e.width * 100 + '%';
       box.style.height = e.height * 100 + '%';
+      if (showAllElements) {
+        const badge = document.createElement('span');
+        badge.className = 'element-badge';
+        badge.textContent = String(numberOf.get(e.elementId));
+        box.appendChild(badge);
+      }
       overlay.appendChild(box);
     }
+
+    // Self-report, so "nothing is highlighted" is never ambiguous again: 0 received means
+    // detection is failing, received-but-0-drawn means the filter is wrong, and drawn-but-
+    // invisible means CSS. If this readout is missing entirely, the panel is running a stale
+    // cached build and nothing else here can be trusted.
+    const readout = document.getElementById('element-count');
+    if (readout) {
+      readout.textContent = elements.length + ' found / ' + shown.length + ' shown';
+    }
+
     if (hoveredElement) updateHover(hoveredElement);
+  }
+
+  const showAllBtn = document.getElementById('show-all-btn');
+  if (showAllBtn) {
+    showAllBtn.addEventListener('click', () => {
+      showAllElements = !showAllElements;
+      showAllBtn.setAttribute('aria-pressed', String(showAllElements));
+      renderOverlay();
+    });
   }
 
   function showStatus(text) {

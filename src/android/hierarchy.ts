@@ -130,3 +130,13 @@ export class HierarchyUnavailableError extends Error {
     this.drivers = drivers;
   }
 }
+
+/**
+ * Whether Reload can fix this on its own by force-stopping the named driver(s), rather than
+ * just telling the user to. Only a UiAutomation conflict with an identified driver is
+ * recoverable this way - an accessibility service holding the slot, or a conflict with no
+ * driver identified, needs a different fix (or a human).
+ */
+export function canAutoRecoverHierarchy(reason: HierarchyFailureReason, drivers: string[]): boolean {
+  return reason === 'uiautomation-conflict' && drivers.length > 0;
+}

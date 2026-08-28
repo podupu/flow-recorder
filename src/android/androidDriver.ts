@@ -1,5 +1,7 @@
 import * as adb from './adb';
+import { HierarchyUnavailableError, canAutoRecoverHierarchy } from './hierarchy';
 import { parseUiNodes, resolveElementSelector, isSelectable } from './uiautomator';
+import { InstalledApp, parseAndroidPackages, isAutomationApp } from '../installedApps';
 import {
   DeviceDriver,
   DeviceElement,
@@ -19,6 +21,19 @@ export class AndroidDriver implements DeviceDriver {
   public readonly platform: DevicePlatform = 'Android';
   private size: DeviceSize | undefined;
   private lastRawSize: DeviceSize | undefined;
+  /**
+   * Chains every hierarchy dump onto the previous one so at most one `uiautomator dump` runs
+   * at a time on this device.
+   *
+   * Android allows only one UiAutomation client at a time, and the mirror's poll timer,
+   * Replay, and Diagnose Broken Selectors each call `elements()` independently - with no
+   * queue, two overlapping calls race for that single connection and the loser is SIGKILLed
+   * (RC=137). That surfaced as "another app holds the device UiAutomation connection" even
+   * with no other app running: the "other app" was this extension colliding with itself.
+   * `dumpChain.catch(() => {})` keeps a rejection from ever jamming the queue for the caller
+   * behind it.
+   */
+  private dumpChain: Promise<unknown> = Promise.resolve();
 
   constructor(public readonly deviceId: string) {}
 
@@ -31,10 +46,19 @@ export class AndroidDriver implements DeviceDriver {
     return adb.screenshot(this.deviceId);
   }
 
+  private serializedDump(): Promise<string> {
+    const run = this.dumpChain.then(
+      () => adb.dumpUiHierarchy(this.deviceId),
+      () => adb.dumpUiHierarchy(this.deviceId)
+    );
+    this.dumpChain = run.catch(() => {});
+    return run;
+  }
+
   public async elements(): Promise<DeviceElement[]> {
     const screen = await this.screenSize();
     this.lastRawSize = screen;
-    const xml = await adb.dumpUiHierarchy(this.deviceId);
+    const xml = await this.serializedDump();
     const nodes = parseUiNodes(xml);
 
     return nodes.map((n, i) => {
@@ -116,6 +140,11 @@ export class AndroidDriver implements DeviceDriver {
     return adb.hideKeyboard(this.deviceId);
   }
 
+  public async listApps(): Promise<InstalledApp[]> {
+    const out = await adb.listPackages(this.deviceId);
+    return parseAndroidPackages(out).filter((a) => !isAutomationApp(a.bundleId));
+  }
+
   public launchApp(appId: string): Promise<void> {
     return adb.launchApp(this.deviceId, appId);
   }
@@ -150,5 +179,14 @@ export class AndroidDriver implements DeviceDriver {
 
   public setDarkMode(enabled: boolean): Promise<void> {
     return adb.setDarkMode(this.deviceId, enabled);
+  }
+
+  public killConflictingAutomation(): Promise<string[]> {
+    return adb.killAutomationDrivers(this.deviceId);
+  }
+
+  public recoverableDriversFor(err: unknown): string[] {
+    if (!(err instanceof HierarchyUnavailableError)) return [];
+    return canAutoRecoverHierarchy(err.reason, err.drivers) ? err.drivers : [];
   }
 }

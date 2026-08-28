@@ -1,6 +1,12 @@
 import { execFile } from 'child_process';
 import * as idb from './idb';
-import { iosKeyboardRegion, parseIosElements, parseIosScreenSize } from './iosElements';
+import {
+  iosKeyboardRegion,
+  isBlankHierarchy,
+  parseIosElements,
+  parseIosScreenSize
+} from './iosElements';
+import { InstalledApp, parseSimctlApps, isAutomationApp } from '../installedApps';
 import {
   DeviceDriver,
   DeviceElement,
@@ -34,15 +40,23 @@ export class IosDriver implements DeviceDriver {
   public readonly platform: DevicePlatform = 'iOS';
   private size: DeviceSize | undefined;
   private lastRaw: any[] = [];
+  /** Rate-limits the wake nudge so a poll loop cannot fight a deliberately locked device. */
+  private lastWakeAt = 0;
 
   constructor(public readonly deviceId: string) {}
 
   public async screenSize(): Promise<DeviceSize> {
     if (this.size) return this.size;
-    const raw = await idb.describeAll(this.deviceId);
+
+    const raw = await this.describeAwake();
     this.lastRaw = raw;
     const parsed = parseIosScreenSize(raw);
-    if (!parsed) throw new Error('Could not determine the simulator screen size from idb.');
+    if (!parsed) {
+      throw new Error(
+        'The simulator screen appears to be off or locked, so there is nothing to mirror. ' +
+          'Unlock the simulator, then reopen the mirror.'
+      );
+    }
     this.size = parsed;
     return parsed;
   }
@@ -51,9 +65,44 @@ export class IosDriver implements DeviceDriver {
     return idb.screenshot(this.deviceId);
   }
 
+  /**
+   * The hierarchy, waking the device first if it has nothing to report.
+   *
+   * A locked or sleeping simulator returns a single Application element sized 0x0 rather than
+   * an error. Left alone that surfaces as an empty overlay - no element detection, and a dark
+   * screen - with nothing explaining why. Pressing HOME wakes it, rate-limited so a 2.5s poll
+   * cannot keep overriding a device the user locked on purpose.
+   */
+  private async describeAwake(): Promise<any[]> {
+    let raw = await idb.describeAll(this.deviceId);
+    if (!isBlankHierarchy(raw)) return raw;
+
+    const now = Date.now();
+    if (now - this.lastWakeAt < 15000) return raw;
+    this.lastWakeAt = now;
+
+    try {
+      await idb.pressButton(this.deviceId, 'HOME');
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      raw = await idb.describeAll(this.deviceId);
+    } catch {
+      // Caller reports the blank hierarchy with an actionable message.
+    }
+    return raw;
+  }
+
   public async elements(): Promise<DeviceElement[]> {
-    const raw = await idb.describeAll(this.deviceId);
+    const raw = await this.describeAwake();
     this.lastRaw = raw;
+
+    // Reported rather than returned empty: an empty overlay looks like broken element
+    // detection, when the truth is simply that the screen is off.
+    if (isBlankHierarchy(raw)) {
+      throw new Error(
+        'The simulator screen is off or locked, so there are no elements to detect. ' +
+          'Unlock the simulator - the mirror recovers on its own once it is awake.'
+      );
+    }
     // Re-read the size each refresh so rotation is picked up.
     const size = parseIosScreenSize(raw);
     if (size) this.size = size;
@@ -128,6 +177,11 @@ export class IosDriver implements DeviceDriver {
     await idb.tap(this.deviceId, Math.round(size.width / 2), Math.round(size.height * 0.06));
   }
 
+  public async listApps(): Promise<InstalledApp[]> {
+    const out = await idb.listApps(this.deviceId);
+    return parseSimctlApps(out).filter((a) => !isAutomationApp(a.bundleId));
+  }
+
   public launchApp(appId: string): Promise<void> {
     return idb.launchApp(this.deviceId, appId);
   }
@@ -171,5 +225,15 @@ export class IosDriver implements DeviceDriver {
 
   public setDarkMode(enabled: boolean): Promise<void> {
     return simctl(['ui', this.deviceId, 'appearance', enabled ? 'dark' : 'light']);
+  }
+
+  /** iOS has no UiAutomation-style single-connection limit for describe-all to conflict over. */
+  public async killConflictingAutomation(): Promise<string[]> {
+    return [];
+  }
+
+  /** iOS errors never carry a recoverable-driver list; there is no such conflict class. */
+  public recoverableDriversFor(_err: unknown): string[] {
+    return [];
   }
 }

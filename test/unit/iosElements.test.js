@@ -3,7 +3,8 @@ const {
   parseIosScreenSize,
   parseIosElements,
   iosKeyboardRegion,
-  iosSelector
+  iosSelector,
+  isBlankHierarchy
 } = require('../../out/ios/iosElements');
 
 // Trimmed from a real `idb ui describe-all` on iPhone 17 Pro (iOS 26.5).
@@ -93,6 +94,114 @@ describe('parsing iOS elements', () => {
   it('survives a non-array input', () => {
     assert.deepStrictEqual(parseIosElements(null, screen), []);
     assert.deepStrictEqual(parseIosElements(undefined, screen), []);
+  });
+});
+
+describe('reading text fields whose placeholder has no AXLabel', () => {
+  const screen = { width: 402, height: 874 };
+
+  // Real data from a live signup form: UIKit puts the placeholder into AXValue, not AXLabel,
+  // when no accessibility label is set - so "First Name", "Email Address" etc. were invisible
+  // in the mirror even though the field is clearly visible on screen.
+  const FIELDS = [
+    { frame: { x: 0, y: 0, width: 402, height: 874 }, type: 'Application', AXLabel: ' ' },
+    {
+      frame: { x: 36, y: 430.67, width: 289, height: 53 },
+      type: 'TextField',
+      AXLabel: null,
+      AXValue: 'First Name'
+    },
+    {
+      frame: { x: 36, y: 576.67, width: 289, height: 53 },
+      type: 'SecureTextField',
+      AXLabel: null,
+      AXValue: 'Password'
+    }
+  ];
+
+  it('falls back to AXValue for a TextField with no label', () => {
+    const els = parseIosElements(FIELDS, screen);
+    const first = els.find((e) => e.className === 'TextField');
+    assert.strictEqual(first.text, 'First Name');
+  });
+
+  it('applies the same fallback to a SecureTextField', () => {
+    const els = parseIosElements(FIELDS, screen);
+    const pw = els.find((e) => e.className === 'SecureTextField');
+    assert.strictEqual(pw.text, 'Password');
+  });
+
+  it('makes the field selectable, since it now has a usable label', () => {
+    const els = parseIosElements(FIELDS, screen);
+    assert.ok(els.find((e) => e.className === 'TextField').selectable);
+  });
+
+  it('still prefers a real AXLabel over the value when both are present', () => {
+    const labelled = [
+      { frame: { x: 0, y: 0, width: 402, height: 874 }, type: 'Application' },
+      { frame: { x: 0, y: 10, width: 100, height: 40 }, type: 'TextField', AXLabel: 'Search', AXValue: 'pizza' }
+    ];
+    const field = parseIosElements(labelled, screen).find((e) => e.className === 'TextField');
+    assert.strictEqual(field.text, 'Search');
+  });
+
+  it('does not apply the fallback to value-is-state controls', () => {
+    // A slider's value ("50%") or a switch's ("1") is not a name - using it as the label
+    // would be misleading rather than helpful. Asserted on the control itself, not on
+    // element 0: element 0 is the Application root, whose text is always undefined, so
+    // indexing it would pass no matter what the parser did.
+    const controls = [
+      { frame: { x: 0, y: 0, width: 402, height: 874 }, type: 'Application' },
+      { frame: { x: 0, y: 10, width: 100, height: 40 }, type: 'Slider', AXLabel: null, AXValue: '50%' },
+      { frame: { x: 0, y: 60, width: 51, height: 31 }, type: 'Switch', AXLabel: null, AXValue: '1' }
+    ];
+    const els = parseIosElements(controls, screen);
+    assert.strictEqual(els.find((e) => e.className === 'Slider').text, undefined);
+    assert.strictEqual(els.find((e) => e.className === 'Switch').text, undefined);
+  });
+
+  it('reads body copy from a StaticText that has no AXLabel', () => {
+    // The case that made a whole portal-style app look textless: nearly all of its visible
+    // copy is StaticText, and UIKit leaves AXLabel null unless the app sets one explicitly.
+    const copy = [
+      { frame: { x: 0, y: 0, width: 402, height: 874 }, type: 'Application' },
+      {
+        frame: { x: 68, y: 200, width: 257, height: 16 },
+        type: 'StaticText',
+        AXLabel: null,
+        AXValue: 'I acknowledge that I have read and agree'
+      }
+    ];
+    const text = parseIosElements(copy, screen).find((e) => e.className === 'StaticText');
+    assert.strictEqual(text.text, 'I acknowledge that I have read and agree');
+    assert.ok(text.selectable, 'StaticText with recovered copy must become selectable');
+  });
+
+  it('reads a Link with no AXLabel', () => {
+    const link = [
+      { frame: { x: 0, y: 0, width: 402, height: 874 }, type: 'Application' },
+      { frame: { x: 68, y: 230, width: 120, height: 16 }, type: 'Link', AXLabel: null, AXValue: 'Terms of Use' }
+    ];
+    assert.strictEqual(parseIosElements(link, screen).find((e) => e.className === 'Link').text, 'Terms of Use');
+  });
+
+  it('builds a text selector from recovered StaticText copy, not a point', () => {
+    // The point of recovering the text at all: the resulting step must be readable and
+    // resilient, not `point: 48%,25%`.
+    const copy = [
+      { frame: { x: 0, y: 0, width: 402, height: 874 }, type: 'Application' },
+      { frame: { x: 68, y: 200, width: 257, height: 16 }, type: 'StaticText', AXLabel: null, AXValue: 'Continue' }
+    ];
+    const el = parseIosElements(copy, screen).find((e) => e.className === 'StaticText');
+    assert.deepStrictEqual(el.selector, { text: 'Continue' });
+  });
+
+  it('leaves a genuinely empty field without a fabricated label', () => {
+    const empty = [
+      { frame: { x: 0, y: 0, width: 402, height: 874 }, type: 'Application' },
+      { frame: { x: 0, y: 10, width: 100, height: 40 }, type: 'TextField', AXLabel: null, AXValue: '' }
+    ];
+    assert.strictEqual(parseIosElements(empty, screen)[0].text, undefined);
   });
 });
 
@@ -199,5 +308,34 @@ describe('elements extending beyond the screen', () => {
       assert.ok(e.left >= 0 && e.top >= 0, 'no negative origin');
       assert.ok(e.left + e.width <= 1.0001 && e.top + e.height <= 1.0001, 'stays on screen');
     }
+  });
+});
+
+describe('detecting a locked or sleeping screen', () => {
+  // Real output from a locked iPhone 17 Pro: one Application element sized 0x0.
+  const ASLEEP = [
+    {
+      AXFrame: '{{0, 0}, {0, 0}}',
+      frame: { y: 0, x: 0, width: 0, height: 0 },
+      type: 'Application',
+      AXLabel: null
+    }
+  ];
+
+  it('recognises the zero-size signature', () => {
+    assert.strictEqual(isBlankHierarchy(ASLEEP), true);
+  });
+
+  it('does not flag a healthy screen', () => {
+    assert.strictEqual(isBlankHierarchy(SAMPLE), false);
+  });
+
+  it('treats an empty hierarchy as blank too', () => {
+    assert.strictEqual(isBlankHierarchy([]), true);
+    assert.strictEqual(isBlankHierarchy(null), true);
+  });
+
+  it('yields no screen size, which is what triggers the wake retry', () => {
+    assert.strictEqual(parseIosScreenSize(ASLEEP), undefined);
   });
 });

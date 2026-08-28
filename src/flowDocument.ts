@@ -10,7 +10,9 @@ export interface FlowDoc {
 export function parseFlowDocument(document: vscode.TextDocument): FlowDoc {
   const text = document.getText();
   if (!text.trim()) {
-    return { config: { appId: 'com.example.app' }, steps: [] };
+    // No fabricated appId: this value used to reach a real `simctl launch`, which failed
+    // with "The request to open com.example.app failed" on a device that never had it.
+    return { config: {}, steps: [] };
   }
   try {
     const docs = yaml.loadAll(text) as any[];

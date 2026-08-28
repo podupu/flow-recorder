@@ -47,10 +47,22 @@ Every flow appears in VS Code's Testing sidebar, and **every step gets its own p
 the gutter** — hover a line and run from there. After a run, each step shows its state:
 passed, failed, or never reached.
 
-Running a single step writes a temporary flow containing the setup prefix (`launchApp`,
-`clearState`, and so on) plus that step onward, then runs it. The prefix is kept because most
-flows assume the app is already open — running from the middle without it usually fails on the
-first interaction.
+Two ways to run a step, because they answer different questions:
+
+- **Run** invokes real `maestro`. This is the authoritative check, but `maestro` cannot
+  continue from the app's current screen - verified by opening a settings screen and running a
+  single `assertVisible` against it: Maestro's own failure screenshot showed the home screen.
+  There is no CLI flag to avoid this. So a mid-flow Run writes a temporary flow with the setup
+  prefix (`launchApp`, `clearState`) plus that step onward, and runs that.
+- **Replay on live app** drives the mirrored device directly - the same taps and assertions
+  the mirror already performs - so it genuinely continues from wherever the app is, and never
+  invokes `maestro`. It is not a substitute for Run: `${variables}`, `runFlow`, `runScript` and
+  `evalScript` need Maestro's own engine and are skipped, reported by name rather than guessed
+  at. Use it to iterate on a single interaction without the app resetting each time; use Run to
+  confirm the flow actually passes.
+
+  Replay prefers the device an open mirror is already attached to; if none is open, it prompts
+  you to pick one, the same as taking a screenshot from the editor does.
 
 The **Debug** profile runs with `--debug-output` so screenshots, hierarchy dumps and logs
 survive a failure.
@@ -131,14 +143,19 @@ emulators, and iOS Simulators:
 
 ```
 Android
-  emulator-5554                    emulator
-iOS Simulators
+  emulator-5554                    emulator · running
+  Pixel_9                          emulator · will boot
+iOS Simulators · running
   iPhone 17 Pro                    iOS 26.5 · booted
-  iPhone 17 Pro Max                iOS 26.5 · will boot
+iOS Simulators · iOS 26.5
+  iPhone 17 Pro Max                will boot
+iOS Simulators · iOS 18.5
+  iPhone 15                        will boot
 ```
 
-Anything marked **will boot** is started for you, so you do not need to launch a simulator
-first. If the list is empty, start a device using the commands below.
+Running devices come first, then simulators grouped by OS version, **newest first**. Anything
+marked **will boot** is started for you — including stopped Android emulators — so you do not
+need to launch anything beforehand.
 
 ### Android
 
@@ -200,6 +217,38 @@ brew tap facebook/fb && brew install idb-companion && pip3 install fb-idb
 Without `idb` the picker will tell you rather than opening a mirror whose taps silently do
 nothing.
 
+### Show every element at once
+
+Hovering shows one element at a time. Click the eye icon in the nav bar (or the keyboard
+shortcut, if you've bound one) to switch to Maestro Studio's inspector view instead: every
+element with real bounds on screen outlined and numbered simultaneously - images, headings and
+unlabeled containers included, not only the elements you could tap - numbered top-to-bottom then
+left-to-right the way you would actually read the screen, not the order the hierarchy happens
+to report them in, which can jump around unpredictably. Hovering still highlights the element
+you are about to interact with, in a different colour, on top of the full inspector.
+
+### When part of a screen has no elements
+
+Some apps hide whole regions from accessibility. Those areas detect nothing at all - not
+unlabelled elements, but no elements - and from inside the mirror that is indistinguishable from
+element detection being broken. The mirror now says which it is looking at:
+
+> 2 areas of this screen report no accessibility elements (16%, 31%). Steps there can only be
+> recorded as coordinates.
+
+This is a finding about the app, not about the recorder, and it cannot be worked around here:
+Maestro reads the same accessibility tree at replay time, so a step targeting text in one of
+those bands would fail even if the recorder guessed the text from the screenshot.
+
+The usual cause in SwiftUI is `.accessibilityHidden(true)` on a container, or an ancestor with
+`.accessibilityElement(children: .ignore)` that supplies no label of its own. Interactive
+controls inside such a container often still appear, which is why a screen can show buttons and
+fields normally while its heading and body text are missing entirely. Fixing it in the app makes
+the text targetable, and fixes VoiceOver at the same time.
+
+The note is informational and styled separately from the warning banner used for genuine
+detection failures - the two have fixes in different codebases.
+
 ### The nav bar
 
 The bar under the mirror matches the platform, because the two do not have the same buttons:
@@ -244,13 +293,26 @@ Stated plainly, because discovering them yourself is worse:
 - **Android keyboard taps are not recorded.** The IME is a separate window that
   `uiautomator dump` does not include, so no honest selector exists for a key. Taps still type
   on the device; use **Input text** to record typing, which is how Maestro represents it.
-- **`uiautomator dump` fails while another tool holds UiAutomation.** A leftover Maestro or
-  Appium driver blocks it. Flow Recorder detects this and names the process to stop, rather
-  than showing an empty overlay.
+- **`uiautomator dump` fails while another tool holds UiAutomation.** Android allows only
+  one UiAutomation client at a time. A leftover Maestro or Appium driver can hold it - Flow
+  Recorder detects this and **Reload force-stops the leaked driver automatically**, before it
+  does anything else. It can also be Flow Recorder colliding with *itself*: the mirror's poll,
+  Replay, and Diagnose Broken Selectors each read the hierarchy independently, and without
+  serialising them the same "another app holds UiAutomation" error appeared with no leaked
+  driver in sight. All three now share one queue per device, so only one dump runs at a time.
 - **iOS: simulators only.** Physical devices need `idb` companion pairing and a signed
   WebDriverAgent.
 - **Orientation and airplane mode are Android-only.** iOS reports them as unsupported rather
   than failing quietly.
+- **An unlabelled iOS text field falls back to its placeholder.** UIKit surfaces an empty
+  field's placeholder in `AXValue`, not `AXLabel`, unless the app sets an explicit
+  accessibility label - so a signup form's "First Name", "Email Address" and so on are read
+  from there. Scoped to text fields only, since a slider or switch's value ("50%", "1") is not
+  a name.
+- **A sleeping iOS Simulator has nothing to mirror.** It reports a zero-size screen rather
+  than an error, so the mirror presses Home to wake it and retries, then explains the state if
+  that does not help. A *locked* simulator is different: it has a real lock screen, which the
+  mirror shows faithfully — swipe up in the mirror to unlock it, as you would on the device.
 
 ## Telemetry
 
