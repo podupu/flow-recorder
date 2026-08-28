@@ -1,40 +1,56 @@
 import * as vscode from 'vscode';
-import * as adb from './android/adb';
-import {
-  parseUiNodes,
-  findLabeledNodeAtPoint,
-  resolveElementSelector,
-  isSelectable,
-  UiNode
-} from './android/uiautomator';
+import { isFlowDocument } from './flowContext';
+import { DeviceDriver, DeviceElement, UnsupportedOperationError } from './deviceDriver';
+
 import { classifySwipeDirection } from './gestures';
-import { navActionSpec } from './deviceNav';
-import { ImeState } from './android/ime';
+import { navButtonsFor, navActionSpecFor } from './deviceNav';
 import { saveScreenshotBesideFlow } from './screenshotCapture';
 import { appendFlowStep, parseFlowDocument } from './flowDocument';
 
-function elementCenter(node: { bounds: { left: number; top: number; right: number; bottom: number } }): {
-  x: number;
-  y: number;
-} {
+/** Fallback selector when a point resolves to no labelled element. */
+function pointSelector(x: number, y: number, screen: { width: number; height: number }) {
+  return { point: `${Math.round((x / screen.width) * 100)}%,${Math.round((y / screen.height) * 100)}%` };
+}
+
+
+/** Centre of a normalised element, in the driver's own coordinate space. */
+function elementCenter(
+  element: DeviceElement,
+  screen: { width: number; height: number }
+): { x: number; y: number } {
   return {
-    x: Math.round((node.bounds.left + node.bounds.right) / 2),
-    y: Math.round((node.bounds.top + node.bounds.bottom) / 2)
+    x: Math.round((element.left + element.width / 2) * screen.width),
+    y: Math.round((element.top + element.height / 2) * screen.height)
   };
 }
 
-export class AndroidMirrorPanel {
-  public static current: AndroidMirrorPanel | undefined;
+/** Smallest element containing the point - the same rule the webview hover uses. */
+function elementAtPoint(
+  elements: DeviceElement[],
+  xPct: number,
+  yPct: number
+): DeviceElement | undefined {
+  let best: DeviceElement | undefined;
+  for (const e of elements) {
+    if (xPct < e.left || xPct > e.left + e.width) continue;
+    if (yPct < e.top || yPct > e.top + e.height) continue;
+    if (!best || e.width * e.height < best.width * best.height) best = e;
+  }
+  return best;
+}
+
+export class MirrorPanel {
+  public static current: MirrorPanel | undefined;
 
   private readonly panel: vscode.WebviewPanel;
   private pollTimer: NodeJS.Timeout | undefined;
   private elementTimer: NodeJS.Timeout | undefined;
   private screenSize: { width: number; height: number } | undefined;
-  private allNodes: UiNode[] = [];
+  private allElements: DeviceElement[] = [];
   private dumping = false;
   /** Last reported hierarchy problem, so the 2.5s poll does not spam notifications. */
   private hierarchyProblem: string | undefined;
-  private imeState: ImeState = { showing: false, region: null };
+  private keyboardShowing = false;
   private activeEditorSub: vscode.Disposable | undefined;
   private optional = false;
   private darkMode = false;
@@ -42,29 +58,29 @@ export class AndroidMirrorPanel {
 
   public static async createOrShow(
     context: vscode.ExtensionContext,
-    deviceId: string,
+    driver: DeviceDriver,
     flowUri: vscode.Uri
   ): Promise<void> {
-    if (AndroidMirrorPanel.current) {
-      AndroidMirrorPanel.current.setTarget(flowUri);
-      AndroidMirrorPanel.current.panel.reveal(vscode.ViewColumn.Beside);
+    if (MirrorPanel.current) {
+      MirrorPanel.current.setTarget(flowUri);
+      MirrorPanel.current.panel.reveal(vscode.ViewColumn.Beside);
       return;
     }
     const panel = vscode.window.createWebviewPanel(
-      'flowRecorder.androidMirror',
-      `Android mirror - ${deviceId}`,
+      'flowRecorder.deviceMirror',
+      `${driver.platform} mirror - ${driver.deviceId}`,
       vscode.ViewColumn.Beside,
       { enableScripts: true, retainContextWhenHidden: true }
     );
-    const mirror = new AndroidMirrorPanel(context, panel, deviceId, flowUri);
-    AndroidMirrorPanel.current = mirror;
+    const mirror = new MirrorPanel(context, panel, driver, flowUri);
+    MirrorPanel.current = mirror;
     await mirror.init();
   }
 
   private constructor(
     private readonly context: vscode.ExtensionContext,
     panel: vscode.WebviewPanel,
-    public readonly deviceId: string,
+    public readonly driver: DeviceDriver,
     private flowUri: vscode.Uri
   ) {
     this.panel = panel;
@@ -74,12 +90,19 @@ export class AndroidMirrorPanel {
     // Follow whichever flow the user is editing. A non-flow editor (or the mirror itself
     // taking focus) leaves the target alone rather than dropping recorded steps.
     this.activeEditorSub = vscode.window.onDidChangeActiveTextEditor((editor) => {
-      if (editor && editor.document.fileName.endsWith('.flow.yaml')) {
+      if (editor && isFlowDocument(editor.document)) {
         this.setTarget(editor.document.uri);
       }
     });
     this.panel.webview.onDidReceiveMessage((msg) => {
-      this.handleMessage(msg).catch((err) => vscode.window.showErrorMessage('Command failed: ' + err.message));
+      this.handleMessage(msg).catch((err) => {
+        // A capability the platform genuinely lacks is not a bug - say so plainly.
+        if (err instanceof UnsupportedOperationError) {
+          vscode.window.showInformationMessage(err.message);
+          return;
+        }
+        vscode.window.showErrorMessage('Command failed: ' + err.message);
+      });
     });
   }
 
@@ -90,7 +113,7 @@ export class AndroidMirrorPanel {
 
   private async init(): Promise<void> {
     try {
-      this.screenSize = await adb.getScreenSize(this.deviceId);
+      this.screenSize = await this.driver.screenSize();
     } catch (err: any) {
       vscode.window.showErrorMessage(`Could not read device screen size: ${err.message}`);
     }
@@ -126,7 +149,7 @@ export class AndroidMirrorPanel {
   /** Captures one frame and pushes it to the webview. Used by the poll and by Reload. */
   private async pushFrame(): Promise<void> {
     try {
-      const png = await adb.screenshot(this.deviceId);
+      const png = await this.driver.screenshot();
       this.panel.webview.postMessage({ type: 'frame', data: png.toString('base64') });
     } catch {
       // Device briefly busy or reconnecting - the next poll tick catches up.
@@ -147,43 +170,15 @@ export class AndroidMirrorPanel {
     }
     this.dumping = true;
     try {
-      const xml = await adb.dumpUiHierarchy(this.deviceId);
-      const all = parseUiNodes(xml);
-      this.allNodes = all;
-      const screen = this.screenSize;
-      // The IME is a separate window and never appears in the dump, so its region is fetched
-      // alongside and sent to the webview to mask instead of mis-resolving.
-      this.imeState = await adb.getImeState(this.deviceId);
-      const payload = all.map((n, i) => {
-        const c = elementCenter(n);
-        return {
-          elementId: i,
-          text: n.text,
-          resourceId: n.resourceId,
-          contentDesc: n.contentDesc,
-          className: n.className,
-          left: n.bounds.left / screen.width,
-          top: n.bounds.top / screen.height,
-          width: (n.bounds.right - n.bounds.left) / screen.width,
-          height: (n.bounds.bottom - n.bounds.top) / screen.height,
-          selector: resolveElementSelector(n, c.x, c.y, screen),
-          parentId: n.parentId !== undefined ? n.parentId : -1,
-          selectable: isSelectable(n, screen)
-        };
-      });
-      const r = this.imeState.region;
+      // Drivers hand back elements already normalised to 0-1 with selectors resolved, so
+      // the panel stays free of any platform-specific hierarchy shape.
+      this.allElements = await this.driver.elements();
+      const keyboard = await this.driver.keyboardRegion();
+      this.keyboardShowing = !!keyboard;
       this.panel.webview.postMessage({
         type: 'elements',
-        nodes: payload,
-        keyboard:
-          this.imeState.showing && r
-            ? {
-                left: r.left / screen.width,
-                top: r.top / screen.height,
-                width: (r.right - r.left) / screen.width,
-                height: (r.bottom - r.top) / screen.height
-              }
-            : null
+        nodes: this.allElements,
+        keyboard
       });
       // Recovered - clear any standing problem banner and re-arm the one-shot notification.
       if (this.hierarchyProblem) {
@@ -261,9 +256,9 @@ export class AndroidMirrorPanel {
     });
   }
 
-  private nodeAt(elementId: number | undefined): UiNode | undefined {
+  private nodeAt(elementId: number | undefined): DeviceElement | undefined {
     if (elementId === undefined) return undefined;
-    return this.allNodes[elementId];
+    return this.allElements[elementId];
   }
 
   private async handleMessage(msg: any): Promise<void> {
@@ -353,29 +348,45 @@ export class AndroidMirrorPanel {
   }
 
   /**
-   * Android nav-bar buttons. Back and Home map onto real Maestro commands and are recorded;
+   * Device nav-bar buttons. Back and Home map onto real Maestro commands and are recorded;
    * Recents drives the device only (Maestro has no app-switch command) and Reload just
    * re-polls the mirror. See src/deviceNav.ts for that policy.
    */
   private async handleNav(action: string): Promise<void> {
     let spec;
     try {
-      spec = navActionSpec(action);
+      spec = navActionSpecFor(action, this.driver.platform);
     } catch {
       return;
     }
 
-    if (spec.keycode !== null) {
-      try {
-        await adb.pressKeycode(this.deviceId, spec.keycode);
-      } catch (err: any) {
-        vscode.window.showErrorMessage(`Failed to send ${action} to device: ${err.message}`);
+    try {
+      // Delivery differs per platform; the recorded step does not.
+      if (spec.keycode !== null) {
+        await this.driver.pressKeycode(spec.keycode);
+      } else if (spec.gesture === 'edgeSwipeBack') {
+        await this.driver.back();
+      } else if (spec.gesture === 'doubleHome') {
+        await this.driver.pressKey('home');
+        await this.driver.pressKey('home');
+      } else if (spec.button === 'HOME') {
+        await this.driver.pressKey('home');
+      } else if (spec.button === 'LOCK') {
+        await this.driver.pressKey('lock');
+      }
+    } catch (err: any) {
+      if (err instanceof UnsupportedOperationError) {
+        vscode.window.showInformationMessage(err.message);
         return;
       }
+      vscode.window.showErrorMessage(`Failed to send ${action} to device: ${err.message}`);
+      return;
     }
+
     if (spec.step !== null) {
       await this.emit(spec.step);
     }
+
     // Every nav action changes what is on screen, so refresh the frame and hierarchy now
     // instead of waiting out the poll interval. Reload forces a genuinely new dump and
     // reports the result, so the button visibly does something.
@@ -388,7 +399,7 @@ export class AndroidMirrorPanel {
     if (isReload && !this.hierarchyProblem) {
       this.panel.webview.postMessage({
         type: 'status',
-        text: `Refreshed - ${this.allNodes.length} elements${this.imeState.showing ? ' (keyboard open)' : ''}`
+        text: `Refreshed - ${this.allElements.length} elements${this.keyboardShowing ? ' (keyboard open)' : ''}`
       });
     }
   }
@@ -402,7 +413,7 @@ export class AndroidMirrorPanel {
   private async handleKeyboardTap(xPct: number, yPct: number): Promise<void> {
     if (!this.screenSize) return;
     try {
-      await adb.tap(this.deviceId, xPct * this.screenSize.width, yPct * this.screenSize.height);
+      await this.driver.tap(xPct * this.screenSize.width, yPct * this.screenSize.height);
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to send tap to device: ${err.message}`);
       return;
@@ -419,13 +430,13 @@ export class AndroidMirrorPanel {
     const x = xPct * this.screenSize.width;
     const y = yPct * this.screenSize.height;
     try {
-      await adb.tap(this.deviceId, x, y);
+      await this.driver.tap(x, y);
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to send tap to device: ${err.message}`);
       return;
     }
-    const node = findLabeledNodeAtPoint(this.allNodes, x, y);
-    await this.emit({ tapOn: resolveElementSelector(node, x, y, this.screenSize) });
+    const node = elementAtPoint(this.allElements, xPct, yPct);
+    await this.emit({ tapOn: (node ? node.selector : pointSelector(x, y, this.screenSize)) });
     void this.refreshElements();
   }
 
@@ -440,16 +451,16 @@ export class AndroidMirrorPanel {
       vscode.window.showWarningMessage('Element no longer present - refresh and try again.');
       return;
     }
-    const c = elementCenter(node);
+    const c = elementCenter(node, this.screenSize);
     try {
-      if (action === 'tap') await adb.tap(this.deviceId, c.x, c.y);
-      else if (action === 'longPress') await adb.longPress(this.deviceId, c.x, c.y);
-      else await adb.doubleTap(this.deviceId, c.x, c.y);
+      if (action === 'tap') await this.driver.tap(c.x, c.y);
+      else if (action === 'longPress') await this.driver.longPress(c.x, c.y);
+      else await this.driver.doubleTap(c.x, c.y);
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to send ${action} to device: ${err.message}`);
       return;
     }
-    await this.emit({ [commandKey]: resolveElementSelector(node, c.x, c.y, this.screenSize) });
+    await this.emit({ [commandKey]: node.selector });
     void this.refreshElements();
   }
 
@@ -461,15 +472,15 @@ export class AndroidMirrorPanel {
     if (!this.screenSize) return;
     const node = this.nodeAt(msg.elementId);
     if (node) {
-      const c = elementCenter(node);
+      const c = elementCenter(node, this.screenSize);
       try {
-        if (action === 'longPress') await adb.longPress(this.deviceId, c.x, c.y);
-        else await adb.doubleTap(this.deviceId, c.x, c.y);
+        if (action === 'longPress') await this.driver.longPress(c.x, c.y);
+        else await this.driver.doubleTap(c.x, c.y);
       } catch (err: any) {
         vscode.window.showErrorMessage(`Failed to send ${action} to device: ${err.message}`);
         return;
       }
-      await this.emit({ [commandKey]: resolveElementSelector(node, c.x, c.y, this.screenSize) });
+      await this.emit({ [commandKey]: node.selector });
     } else {
       if (!Number.isFinite(msg.xPct) || !Number.isFinite(msg.yPct)) {
         vscode.window.showWarningMessage('Hover an element, or press on the screen, to long-press or double-tap.');
@@ -478,13 +489,13 @@ export class AndroidMirrorPanel {
       const x = msg.xPct * this.screenSize.width;
       const y = msg.yPct * this.screenSize.height;
       try {
-        if (action === 'longPress') await adb.longPress(this.deviceId, x, y);
-        else await adb.doubleTap(this.deviceId, x, y);
+        if (action === 'longPress') await this.driver.longPress(x, y);
+        else await this.driver.doubleTap(x, y);
       } catch (err: any) {
         vscode.window.showErrorMessage(`Failed to send ${action} to device: ${err.message}`);
         return;
       }
-      await this.emit({ [commandKey]: resolveElementSelector(undefined, x, y, this.screenSize) });
+      await this.emit({ [commandKey]: pointSelector(x, y, this.screenSize) });
     }
     void this.refreshElements();
   }
@@ -496,7 +507,7 @@ export class AndroidMirrorPanel {
     const ex = msg.endXpct * this.screenSize.width;
     const ey = msg.endYpct * this.screenSize.height;
     try {
-      await adb.swipe(this.deviceId, sx, sy, ex, ey);
+      await this.driver.swipe(sx, sy, ex, ey);
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to send swipe to device: ${err.message}`);
       return;
@@ -511,11 +522,11 @@ export class AndroidMirrorPanel {
     const node = this.nodeAt(msg.elementId);
     try {
       if (node) {
-        const c = elementCenter(node);
-        await adb.tap(this.deviceId, c.x, c.y);
-        await this.emit({ tapOn: resolveElementSelector(node, c.x, c.y, this.screenSize) });
+        const c = elementCenter(node, this.screenSize);
+        await this.driver.tap(c.x, c.y);
+        await this.emit({ tapOn: node.selector });
       }
-      await adb.inputText(this.deviceId, msg.text);
+      await this.driver.inputText(msg.text);
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to input text: ${err.message}`);
       return;
@@ -526,7 +537,7 @@ export class AndroidMirrorPanel {
 
   private async handleEraseText(count: number): Promise<void> {
     try {
-      await adb.eraseText(this.deviceId, count);
+      await this.driver.eraseText(count);
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to erase text: ${err.message}`);
       return;
@@ -536,7 +547,7 @@ export class AndroidMirrorPanel {
 
   private async handlePressKey(key: string): Promise<void> {
     try {
-      await adb.pressKey(this.deviceId, key);
+      await this.driver.pressKey(key);
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to press key: ${err.message}`);
       return;
@@ -546,7 +557,7 @@ export class AndroidMirrorPanel {
 
   private async handleBack(): Promise<void> {
     try {
-      await adb.back(this.deviceId);
+      await this.driver.back();
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to go back: ${err.message}`);
       return;
@@ -556,7 +567,7 @@ export class AndroidMirrorPanel {
 
   private async handleHideKeyboard(): Promise<void> {
     try {
-      await adb.hideKeyboard(this.deviceId);
+      await this.driver.hideKeyboard();
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to hide keyboard: ${err.message}`);
       return;
@@ -586,8 +597,8 @@ export class AndroidMirrorPanel {
       return;
     }
     try {
-      if (clearState) await adb.clearState(this.deviceId, appId);
-      await adb.launchApp(this.deviceId, appId);
+      if (clearState) await this.driver.clearState(appId);
+      await this.driver.launchApp(appId);
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to launch app: ${err.message}`);
       return;
@@ -603,7 +614,7 @@ export class AndroidMirrorPanel {
       return;
     }
     try {
-      await adb.stopApp(this.deviceId, appId);
+      await this.driver.stopApp(appId);
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to stop app: ${err.message}`);
       return;
@@ -618,7 +629,7 @@ export class AndroidMirrorPanel {
       return;
     }
     try {
-      await adb.killApp(this.deviceId, appId, clearState);
+      await this.driver.killApp(appId, clearState);
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to kill app: ${err.message}`);
       return;
@@ -633,7 +644,7 @@ export class AndroidMirrorPanel {
       return;
     }
     try {
-      await adb.clearState(this.deviceId, appId);
+      await this.driver.clearState(appId);
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to clear state: ${err.message}`);
       return;
@@ -643,7 +654,7 @@ export class AndroidMirrorPanel {
 
   private async handleSetOrientation(orientation: string): Promise<void> {
     try {
-      await adb.setOrientation(this.deviceId, orientation);
+      await this.driver.setOrientation(orientation);
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to set orientation: ${err.message}`);
       return;
@@ -655,7 +666,7 @@ export class AndroidMirrorPanel {
     // Saved beside the flow, not at the workspace root: Maestro resolves takeScreenshot
     // relative to the flow file, so a workspace-root path pointed at nothing.
     try {
-      const rel = await saveScreenshotBesideFlow(this.flowUri, this.deviceId, name || 'step');
+      const rel = await saveScreenshotBesideFlow(this.flowUri, this.driver, name || 'step');
       await this.emit({ takeScreenshot: rel });
       this.panel.webview.postMessage({ type: 'status', text: `Saved ${rel}` });
     } catch (err: any) {
@@ -666,7 +677,7 @@ export class AndroidMirrorPanel {
   private async handleSetClipboard(text: string): Promise<void> {
     if (!text) return;
     try {
-      await adb.setClipboard(this.deviceId, text);
+      await this.driver.setClipboard(text);
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to set clipboard: ${err.message}`);
       return;
@@ -676,7 +687,7 @@ export class AndroidMirrorPanel {
 
   private async handlePasteText(): Promise<void> {
     try {
-      await adb.pasteText(this.deviceId);
+      await this.driver.pasteText();
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to paste text: ${err.message}`);
       return;
@@ -686,7 +697,7 @@ export class AndroidMirrorPanel {
 
   private async handleSetAirplaneMode(enabled: boolean): Promise<void> {
     try {
-      await adb.setAirplaneMode(this.deviceId, enabled);
+      await this.driver.setAirplaneMode(enabled);
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to set airplane mode: ${err.message}`);
       return;
@@ -701,7 +712,7 @@ export class AndroidMirrorPanel {
   private async handleToggleDarkMode(): Promise<void> {
     const next = !this.darkMode;
     try {
-      await adb.setDarkMode(this.deviceId, next);
+      await this.driver.setDarkMode(next);
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to toggle dark mode: ${err.message}`);
       return;
@@ -712,7 +723,7 @@ export class AndroidMirrorPanel {
 
   private async handleScroll(): Promise<void> {
     try {
-      await adb.scroll(this.deviceId);
+      await this.driver.scroll();
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to scroll: ${err.message}`);
       return;
@@ -727,8 +738,8 @@ export class AndroidMirrorPanel {
       vscode.window.showWarningMessage('Hover an element to assert it.');
       return;
     }
-    const c = elementCenter(node);
-    const selector = resolveElementSelector(node, c.x, c.y, this.screenSize);
+    const c = elementCenter(node, this.screenSize);
+    const selector = node.selector;
     await this.emit(visible ? { assertVisible: selector } : { assertNotVisible: selector });
   }
 
@@ -759,19 +770,13 @@ export class AndroidMirrorPanel {
       </div>
     </div>
     <div id="device-nav">
-      <button type="button" class="nav-btn" data-nav="back" title="Back - records a back step" aria-label="Back">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M15.5 4.5 6.8 12l8.7 7.5z"/></svg>
-      </button>
-      <button type="button" class="nav-btn" data-nav="home" title="Home - records pressKey: home" aria-label="Home">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="7"/></svg>
-      </button>
-      <button type="button" class="nav-btn" data-nav="recents" title="Recents - drives the device, not recorded" aria-label="Recents">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="6.25" y="6.25" width="11.5" height="11.5" rx="1.5"/></svg>
-      </button>
-      <span class="nav-sep"></span>
-      <button type="button" class="nav-btn" data-nav="reload" title="Reload screen and elements - not recorded" aria-label="Reload">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4.5V9h-4.5"/></svg>
-      </button>
+      ${navButtonsFor(this.driver.platform)
+        .map(
+          (b, i) =>
+            `${i === navButtonsFor(this.driver.platform).length - 1 ? '<span class="nav-sep"></span>' : ''}` +
+            `<button type="button" class="nav-btn" data-nav="${b.action}" title="${b.title}" aria-label="${b.label}">${b.icon}</button>`
+        )
+        .join('\n      ')}
       <span class="nav-sep"></span>
       <span id="zoom-controls">
         <button type="button" class="zoom-btn" data-zoom="out" title="Zoom out" aria-label="Zoom out">
@@ -795,6 +800,6 @@ export class AndroidMirrorPanel {
     if (this.pollTimer) clearTimeout(this.pollTimer);
     if (this.elementTimer) clearTimeout(this.elementTimer);
     this.activeEditorSub?.dispose();
-    AndroidMirrorPanel.current = undefined;
+    MirrorPanel.current = undefined;
   }
 }

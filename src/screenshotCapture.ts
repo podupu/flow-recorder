@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import * as adb from './android/adb';
+import { DeviceDriver } from './deviceDriver';
+import { AndroidDriver } from './android/androidDriver';
 import { ASSETS_DIR, uniqueScreenshotName } from './screenshots';
 
 /**
@@ -9,7 +11,7 @@ import { ASSETS_DIR, uniqueScreenshotName } from './screenshots';
  */
 export async function saveScreenshotBesideFlow(
   flowUri: vscode.Uri,
-  deviceId: string,
+  driver: DeviceDriver,
   name: string
 ): Promise<string> {
   const dir = vscode.Uri.joinPath(flowUri, '..', ASSETS_DIR);
@@ -22,7 +24,7 @@ export async function saveScreenshotBesideFlow(
   }
 
   const fileName = uniqueScreenshotName(name, existing);
-  const png = await adb.screenshot(deviceId);
+  const png = await driver.screenshot();
   await vscode.workspace.fs.createDirectory(dir);
   await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(dir, fileName), png);
   return `${ASSETS_DIR}/${fileName}`;
@@ -32,7 +34,12 @@ export async function saveScreenshotBesideFlow(
  * Resolves which device to capture from. `preferred` is the device an open mirror is already
  * attached to, so the common case needs no prompt.
  */
-export async function resolveCaptureDevice(preferred?: string): Promise<string | undefined> {
+/**
+ * The driver to capture from: the one an open mirror is already attached to, otherwise an
+ * Android device chosen here. Returning a driver rather than an id keeps capture working on
+ * whichever platform the mirror is showing.
+ */
+export async function resolveCaptureDevice(preferred?: DeviceDriver): Promise<DeviceDriver | undefined> {
   if (preferred) return preferred;
 
   let devices: adb.AdbDevice[];
@@ -50,11 +57,11 @@ export async function resolveCaptureDevice(preferred?: string): Promise<string |
     vscode.window.showErrorMessage('No connected Android devices or emulators found.');
     return undefined;
   }
-  if (online.length === 1) return online[0].id;
+  if (online.length === 1) return new AndroidDriver(online[0].id);
 
   const picked = await vscode.window.showQuickPick(
     online.map((d) => ({ label: d.id, description: d.isEmulator ? 'emulator' : 'device' })),
     { placeHolder: 'Capture a screenshot from which device?' }
   );
-  return picked?.label;
+  return picked ? new AndroidDriver(picked.label) : undefined;
 }
