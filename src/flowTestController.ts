@@ -6,7 +6,6 @@ import * as path from 'path';
 import { buildMaestroArgs } from './environments';
 import { EnvironmentController } from './envStatusBar';
 import { flowPatterns } from './flowContext';
-import { MirrorPanel } from './mirrorPanel';
 import {
   parseFlowSteps,
   stepLabel,
@@ -15,6 +14,10 @@ import {
   FlowStep
 } from './stepItems';
 import * as yaml from 'js-yaml';
+import { MirrorPanel } from './mirrorPanel';
+import { pickDevice } from './devicePicker';
+import { replaySteps } from './replayRunner';
+import { summariseReplay } from './replay';
 
 /**
  * Surfaces every `.flow.yaml` in VS Code's Testing UI: a gutter play button beside each flow,
@@ -40,6 +43,15 @@ export class FlowTestController {
       'Debug (keep artifacts)',
       vscode.TestRunProfileKind.Debug,
       (request, token) => this.run(request, token, true),
+      false
+    );
+    // Runs against the mirrored device directly - no `maestro` process, so the app's current
+    // screen is untouched. This is what makes "run from line 12" actually start at line 12:
+    // maestro's own driver backgrounds the app before the first step of any CLI run.
+    this.controller.createRunProfile(
+      'Replay on live app (no relaunch)',
+      vscode.TestRunProfileKind.Run,
+      (request, token) => this.runReplay(request, token),
       false
     );
 
@@ -128,6 +140,88 @@ export class FlowTestController {
     if (hash === -1) return undefined;
     const n = Number(item.id.slice(hash + 1));
     return Number.isInteger(n) ? n : undefined;
+  }
+
+  private async runReplay(request: vscode.TestRunRequest, token: vscode.CancellationToken): Promise<void> {
+    // Prefer the device an open mirror is already attached to; otherwise ask. The mirror is
+    // commonly closed - notably right after the extension itself reloads or reinstalls, which
+    // always clears this - so requiring it to already be open was a needless dead end.
+    const driver = MirrorPanel.current?.driver ?? (await pickDevice());
+    if (!driver) return;
+
+    const run = this.controller.createTestRun(request);
+    for (const item of this.itemsFor(request)) {
+      if (token.isCancellationRequested) {
+        run.skipped(item);
+        continue;
+      }
+      await this.replayOne(run, item, driver, token);
+    }
+    run.end();
+  }
+
+  private async replayOne(
+    run: vscode.TestRun,
+    item: vscode.TestItem,
+    driver: import('./deviceDriver').DeviceDriver,
+    token: vscode.CancellationToken
+  ): Promise<void> {
+    run.started(item);
+
+    const parentUri = item.uri;
+    const fromIndex = FlowTestController.stepIndexOf(item) ?? 0;
+    if (!parentUri) {
+      run.errored(item, new vscode.TestMessage('Flow has no file path.'));
+      return;
+    }
+
+    let steps: FlowStep[];
+    try {
+      const bytes = await vscode.workspace.fs.readFile(parentUri);
+      steps = parseFlowSteps(Buffer.from(bytes).toString('utf8'));
+    } catch (err: any) {
+      run.errored(item, new vscode.TestMessage(`Could not read the flow: ${err.message}`));
+      return;
+    }
+
+    // Children exist only on the parent flow item, keyed by their own step index - replaying
+    // the parent should still report each child's outcome as it happens.
+    const children = new Map<number, vscode.TestItem>();
+    item.children.forEach((c) => {
+      const idx = FlowTestController.stepIndexOf(c);
+      if (idx !== undefined) children.set(idx, c);
+    });
+
+    const started = Date.now();
+    const outcome = await replaySteps(
+      driver,
+      steps.slice(fromIndex).map((s) => s.value),
+      (offset, result) => {
+        const child = children.get(fromIndex + offset);
+        if (!child) return;
+        if (result === 'ok') run.passed(child);
+        else if (result === 'skipped') run.skipped(child);
+        else run.failed(child, new vscode.TestMessage('Step failed during replay.'));
+      }
+    );
+    const duration = Date.now() - started;
+
+    if (token.isCancellationRequested) {
+      run.skipped(item);
+      return;
+    }
+
+    const summary = summariseReplay(outcome);
+    run.appendOutput(`\r\n${summary}\r\n`);
+
+    if (outcome.failedAt !== undefined) {
+      const line = steps[fromIndex + outcome.failedAt]?.line ?? item.range?.start.line ?? 0;
+      const message = new vscode.TestMessage(summary);
+      message.location = new vscode.Location(parentUri, new vscode.Position(line, 0));
+      run.failed(item, message, duration);
+      return;
+    }
+    run.passed(item, duration);
   }
 
   private itemsFor(request: vscode.TestRunRequest): vscode.TestItem[] {
