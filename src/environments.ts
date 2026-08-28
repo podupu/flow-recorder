@@ -114,6 +114,11 @@ export interface RunOptions {
   debugOutput?: string;
   /** Write artifacts without per-run timestamped subfolders. Requires debugOutput. */
   flattenDebugOutput?: boolean;
+  /**
+   * Device to run against. Without it `maestro test -p ios` picks its own simulator and boots
+   * it - so a run can silently target a different device than the one being mirrored.
+   */
+  deviceId?: string;
 }
 
 export function buildMaestroArgs(
@@ -127,6 +132,7 @@ export function buildMaestroArgs(
   // `maestro test -p <platform>`; the CLI takes the lowercase form, while the in-flow
   // `when: platform:` condition uses Android/iOS/Web.
   if (platform) args.push('-p', platform.toLowerCase());
+  if (options.deviceId) args.push('--udid', options.deviceId);
 
   // Maestro exposes no debug protocol, so the debug profile means "keep the artifacts".
   if (options.debugOutput) {

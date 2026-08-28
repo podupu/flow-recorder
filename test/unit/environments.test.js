@@ -252,3 +252,15 @@ describe('debug profile arguments', () => {
     ]);
   });
 });
+
+describe('targeting a specific device', () => {
+  it('passes --udid so maestro does not pick its own simulator', () => {
+    // Observed: `maestro test -p ios` booted iPhone SE 15.5 instead of the mirrored device.
+    const args = buildMaestroArgs(undefined, 'a.flow.yaml', 'iOS', { deviceId: 'ABC-123' });
+    assert.deepStrictEqual(args, ['test', '-p', 'ios', '--udid', 'ABC-123', 'a.flow.yaml']);
+  });
+
+  it('omits --udid when no device is given', () => {
+    assert.ok(!buildMaestroArgs(undefined, 'a.flow.yaml', 'iOS').includes('--udid'));
+  });
+});

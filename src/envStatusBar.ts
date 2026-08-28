@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { isFlowDocument } from './flowContext';
 import * as fs from 'fs';
 import {
   DEFAULT_ENVIRONMENTS_FILE,
@@ -119,7 +120,7 @@ export class EnvironmentController {
 
   private updateVisibility(): void {
     const editor = vscode.window.activeTextEditor;
-    const isFlow = !!editor && editor.document.fileName.endsWith('.flow.yaml');
+    const isFlow = !!editor && isFlowDocument(editor.document);
     if (isFlow) {
       this.envItem.show();
       this.platformItem.show();

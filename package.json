@@ -1,14 +1,15 @@
 {
   "name": "flow-recorder",
   "displayName": "Flow Recorder",
-  "description": "Maestro Studio-style visual recorder for mixed UI + API flows, as a VS Code custom editor.",
-  "version": "0.0.1",
-  "publisher": "local-dev",
+  "description": "Record Maestro mobile tests by tapping a mirrored Android device or iOS Simulator, straight from your editor.",
+  "version": "0.1.0",
+  "publisher": "podupu",
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
     "Testing",
+    "Visualization",
     "Other"
   ],
   "activationEvents": [
@@ -23,6 +24,9 @@
         "selector": [
           {
             "filenamePattern": "*.flow.yaml"
+          },
+          {
+            "filenamePattern": "*.flow.yml"
           }
         ],
         "priority": "option"
@@ -30,8 +34,13 @@
     ],
     "commands": [
       {
-        "command": "flowRecorder.startAndroidMirror",
-        "title": "Start Android Mirror",
+        "command": "flowRecorder.startMirror",
+        "title": "Start Device Mirror",
+        "category": "Flow Recorder"
+      },
+      {
+        "command": "flowRecorder.diagnoseSelectors",
+        "title": "Diagnose Broken Selectors",
         "category": "Flow Recorder"
       },
       {
@@ -63,43 +72,57 @@
         "command": "flowRecorder.editEnvironments",
         "title": "Edit Environments",
         "category": "Flow Recorder"
+      },
+      {
+        "command": "flowRecorder.showFlowDiagnostics",
+        "title": "Show Flow Detection Diagnostics",
+        "category": "Flow Recorder"
       }
     ],
     "menus": {
       "editor/context": [
         {
           "command": "flowRecorder.addApiBlock",
-          "when": "resourceFilename =~ /\\.flow\\.yaml$/",
+          "when": "flowRecorder.isFlowFile",
+          "group": "flowRecorder@1"
+        },
+        {
+          "command": "flowRecorder.diagnoseSelectors",
+          "when": "flowRecorder.isFlowFile",
           "group": "flowRecorder@1"
         },
         {
           "command": "flowRecorder.addScreenshotBlock",
-          "when": "resourceFilename =~ /\\.flow\\.yaml$/",
+          "when": "flowRecorder.isFlowFile",
           "group": "flowRecorder@2"
         },
         {
-          "command": "flowRecorder.startAndroidMirror",
-          "when": "resourceFilename =~ /\\.flow\\.yaml$/",
+          "command": "flowRecorder.startMirror",
+          "when": "flowRecorder.isFlowFile",
           "group": "flowRecorder@3"
         },
         {
           "command": "flowRecorder.openBlockView",
-          "when": "resourceFilename =~ /\\.flow\\.yaml$/",
+          "when": "flowRecorder.isFlowFile",
           "group": "flowRecorder@4"
         }
       ],
       "commandPalette": [
         {
           "command": "flowRecorder.addApiBlock",
-          "when": "resourceFilename =~ /\\.flow\\.yaml$/"
+          "when": "flowRecorder.isFlowFile"
         },
         {
           "command": "flowRecorder.addScreenshotBlock",
-          "when": "resourceFilename =~ /\\.flow\\.yaml$/"
+          "when": "flowRecorder.isFlowFile"
         },
         {
           "command": "flowRecorder.openBlockView",
-          "when": "resourceFilename =~ /\\.flow\\.yaml$/"
+          "when": "flowRecorder.isFlowFile"
+        },
+        {
+          "command": "flowRecorder.diagnoseSelectors",
+          "when": "flowRecorder.isFlowFile"
         }
       ]
     },
@@ -108,9 +131,32 @@
         "command": "flowRecorder.selectEnvironment",
         "key": "ctrl+alt+e",
         "mac": "cmd+alt+e",
-        "when": "editorTextFocus && resourceFilename =~ /\\.flow\\.yaml$/"
+        "when": "editorTextFocus && flowRecorder.isFlowFile"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Flow Recorder",
+      "properties": {
+        "flowRecorder.telemetry.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Send anonymous usage counts (mirror opened, step recorded, flow run) to help prioritise development. No file contents, selectors, device ids or paths are ever sent. Also requires VS Code telemetry to be enabled."
+        },
+        "flowRecorder.flowPatterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/*.flow.yaml",
+            "**/*.flow.yml",
+            "**/.maestro/**/*.yaml",
+            "**/.maestro/**/*.yml"
+          ],
+          "description": "Globs identifying Maestro flow files. Defaults to the Maestro convention. Set this if your project keeps flows elsewhere, e.g. [\"e2e-tests/**/*.yaml\"]. Matching every *.yaml is not recommended - unrelated files would gain Flow Recorder commands and appear in the Testing view."
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
@@ -129,5 +175,31 @@
   },
   "dependencies": {
     "js-yaml": "^4.1.0"
-  }
+  },
+  "license": "MIT",
+  "icon": "images/icon.png",
+  "galleryBanner": {
+    "color": "#12303B",
+    "theme": "dark"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/podupu/flow-recorder.git"
+  },
+  "homepage": "https://github.com/podupu/flow-recorder#readme",
+  "bugs": {
+    "url": "https://github.com/podupu/flow-recorder/issues"
+  },
+  "keywords": [
+    "maestro",
+    "mobile testing",
+    "e2e",
+    "android",
+    "ios",
+    "appium alternative",
+    "test recorder",
+    "emulator",
+    "simulator",
+    "yaml"
+  ]
 }

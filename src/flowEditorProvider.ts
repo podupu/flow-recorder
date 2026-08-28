@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { runApiRequest } from './recorder';
-import { AndroidMirrorPanel } from './mirrorPanel';
+import { MirrorPanel } from './mirrorPanel';
 import { saveScreenshotBesideFlow, resolveCaptureDevice } from './screenshotCapture';
 import { parseFlowDocument, appendFlowStep, deleteFlowStep, updateStep, writeFlowDocument } from './flowDocument';
 import { buildApiSteps, isLegacyApiStep, convertLegacyApiStepFull } from './maestroApi';
@@ -124,10 +124,10 @@ export class FlowEditorProvider implements vscode.CustomTextEditorProvider {
 
         case 'addScreenshotBlock': {
           // Reuse the device an open mirror is attached to; otherwise ask.
-          const deviceId = await resolveCaptureDevice(AndroidMirrorPanel.current?.deviceId);
-          if (!deviceId) break;
+          const captureDriver = await resolveCaptureDevice(MirrorPanel.current?.driver);
+          if (!captureDriver) break;
           try {
-            const rel = await saveScreenshotBesideFlow(document.uri, deviceId, message.name);
+            const rel = await saveScreenshotBesideFlow(document.uri, captureDriver, message.name);
             await appendFlowStep(document, { takeScreenshot: rel });
           } catch (err: any) {
             vscode.window.showErrorMessage(`Could not capture screenshot: ${err.message}`);

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { isFlow } from './flowContext';
 
 /**
  * Points the YAML language server at the official Maestro Flow schema for `.flow.yaml`.
@@ -47,7 +48,7 @@ export async function registerMaestroFlowSchema(context: vscode.ExtensionContext
     if (!api || typeof api.registerContributor !== 'function') return;
     api.registerContributor(
       'flow-recorder',
-      (resource) => (resource.endsWith('.flow.yaml') || resource.endsWith('.flow.yml') ? SCHEMA_URI : undefined),
+      (resource) => (isFlow(resource) ? SCHEMA_URI : undefined),
       (uri) => (uri === SCHEMA_URI ? schemaText : undefined),
       'Maestro Flow'
     );

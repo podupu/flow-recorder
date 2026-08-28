@@ -1,114 +1,275 @@
-# Flow Recorder (scaffold)
+# Flow Recorder
 
-A starting point for a Maestro Studio-style recorder built as a VS Code
-custom editor, instead of a standalone app. `.flow.yaml` files stay real,
-editable YAML on disk; opening one shows a visual block list (screenshot
-blocks, API blocks) instead of raw text.
+**Record [Maestro](https://maestro.dev) mobile tests by tapping a mirrored device — without leaving your editor.**
 
-## What's here
+Your device appears in a VS Code panel. Hover to see what each element resolves to, click to
+record a step. The flow is written as ordinary YAML you can read, edit and commit.
 
-- `src/extension.ts` - activates the extension, registers the custom editor.
-- `src/flowEditorProvider.ts` - the core piece. Implements VS Code's
-  `CustomTextEditorProvider`: keeps the on-disk YAML as the source of truth,
-  renders a webview, and syncs edits both ways.
-- `src/recorder.ts` - the "recording engine". `runApiRequest` is fully real
-  (plain `fetch`). `captureScreenshotStub` is a **stub** - see the comment
-  in that file for how to wire it to a real device via the Maestro CLI,
-  ADB, or idb.
-- `media/main.js` / `media/main.css` - the webview UI: renders blocks,
-  handles the "+ API block" / "+ Screenshot block" buttons.
-- `examples/example.flow.yaml` - a sample flow mixing a UI step, a
-  screenshot, an API call, and an assertion.
+Works with **Android** devices and emulators, and **iOS Simulators**.
 
-## Run it
+---
+
+## Why
+
+Maestro Studio already lets you author flows — in a separate window, away from the file you
+are editing and the rest of your project. Flow Recorder puts that loop inside the editor, and
+adds the part that actually costs time once a suite exists: finding out **which selector
+broke** when the UI changed.
+
+## What it does
+
+### Mirror a device and record by tapping
+
+Open a flow, run **Flow Recorder: Start Device Mirror**, and pick a device. Android
+devices, Android emulators and iOS Simulators all appear in one list — a shut-down simulator
+is booted for you.
+
+Hover an element to see its outline and the selector it resolves to. Tap, long-press,
+double-tap and swipe are recorded as official Maestro steps, appended to whichever flow you
+are looking at.
+
+### Find broken selectors before a run fails
+
+**Flow Recorder: Diagnose Broken Selectors** checks every selector in the open flow against
+what is on screen right now, and reports the ones that no longer match — with a suggested
+replacement where there is an obvious one.
+
+```
+tapOn selector no longer matches: text: Sign in.  Did you mean text: Sign In?
+```
+
+Selectors containing `${VARIABLES}` are reported as skipped rather than broken, because they
+resolve at run time and cannot be judged statically. A false break is worse than no report.
+
+### Run flows, and single steps, from the Testing view
+
+Every flow appears in VS Code's Testing sidebar, and **every step gets its own play button in
+the gutter** — hover a line and run from there. After a run, each step shows its state:
+passed, failed, or never reached.
+
+Running a single step writes a temporary flow containing the setup prefix (`launchApp`,
+`clearState`, and so on) plus that step onward, then runs it. The prefix is kept because most
+flows assume the app is already open — running from the middle without it usually fails on the
+first interaction.
+
+The **Debug** profile runs with `--debug-output` so screenshots, hierarchy dumps and logs
+survive a failure.
+
+> Maestro has no debug-adapter protocol, so this does not step through a flow. "Debug" means
+> the artifacts are kept.
+
+> Per-step states are reconstructed, not live. Maestro reports one result per flow — its JUnit
+> report has a single `<testcase>`, and its piped output is a one-line summary, because the
+> per-step view is TTY-only. Flow Recorder reads the failure message, marks the step it names
+> as failed, everything before it as passed, and everything after as not reached.
+
+### Switch environments without editing flows
+
+Define named variable sets in `maestro-env.json`:
+
+```json
+{
+  "environments": {
+    "$shared": { "SHOW_LOGS": "true" },
+    "staging":  { "BASE_URL": "https://staging.api.example.com" },
+    "prod":     { "BASE_URL": "https://api.example.com" }
+  }
+}
+```
+
+Pick one from the status bar and it is injected as `maestro test -e KEY=VALUE`. Reference the
+values in flows as `${BASE_URL}`. `$shared` applies to every environment, including "None".
+
+> Keep credentials out of this file — it is meant to be committed. Pass secrets via `-e` from
+> your shell or CI instead.
+
+### Smaller things that add up
+
+- **Clickable paths** — `runFlow`, `runScript` and `takeScreenshot` values open the file they
+  point at.
+- **The right schema.** SchemaStore maps `*.flow.yaml` to *both* Maestro Flow and Estuary Flow
+  Catalog, and Estuary usually wins — producing `Incorrect type. Expected "Estuary Flow
+  Catalog"` on a perfectly valid flow. This bundles the official Maestro schema and points the
+  YAML language server at it, restoring correct validation and command autocomplete.
+- **API steps as real commands.** Recording an API call emits `evalScript` + `assertTrue`, or
+  `runScript` for anything with headers or a body — not an invented `apiRequest:` block.
+
+### Which files count as flows
+
+By default, Maestro's own convention — the same set the official schema uses:
+
+```
+**/*.flow.yaml        **/*.flow.yml
+**/.maestro/**/*.yaml **/.maestro/**/*.yml
+```
+
+So a plain `login.yaml` inside `.maestro/` is recognised. If your project keeps flows
+elsewhere, set `flowRecorder.flowPatterns`:
+
+```json
+"flowRecorder.flowPatterns": ["e2e-tests/**/*.yaml"]
+```
+
+Custom patterns replace the defaults rather than adding to them. Matching every `*.yaml` is
+possible but not recommended — `docker-compose.yaml`, CI workflows and k8s manifests would
+gain Flow Recorder commands and show up in the Testing view.
+
+## Starting the mirror
+
+Open a flow file, then open the Command Palette and run **Flow Recorder: Start Device Mirror**.
+
+| | Command Palette |
+|---|---|
+| **macOS** | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>P</kbd> |
+| **Windows / Linux** | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>P</kbd> |
+
+You can also **right-click inside the flow** and choose *Start Device Mirror*, which skips the
+palette entirely.
+
+The picker lists every mirrorable target at once — connected Android devices, running Android
+emulators, and iOS Simulators:
+
+```
+Android
+  emulator-5554                    emulator
+iOS Simulators
+  iPhone 17 Pro                    iOS 26.5 · booted
+  iPhone 17 Pro Max                iOS 26.5 · will boot
+```
+
+Anything marked **will boot** is started for you, so you do not need to launch a simulator
+first. If the list is empty, start a device using the commands below.
+
+### Android
+
+Flow Recorder finds anything `adb` can see, so a USB device with debugging enabled works the
+same as an emulator.
+
+Check what is connected:
+
+```bash
+adb devices
+```
+
+List the emulators you have, then start one:
+
+```bash
+emulator -list-avds
+```
+
+```bash
+emulator -avd Pixel_9
+```
+
+On Windows the emulator lives under `%LOCALAPPDATA%\Android\Sdk\emulator\emulator.exe`, and
+`adb.exe` under `%LOCALAPPDATA%\Android\Sdk\platform-tools\`. Add both to `PATH`, or launch
+the emulator from Android Studio's **Device Manager**.
+
+> `adb` must be on your `PATH` — Flow Recorder shells out to it. If the picker reports adb is
+> unavailable, that is why.
+
+### iOS Simulator
+
+**macOS only.** iOS Simulators do not exist on Windows or Linux, so on those platforms the
+picker shows Android targets only.
+
+See what is running:
+
+```bash
+xcrun simctl list devices booted
+```
+
+Boot one by name, or let the picker do it for you:
+
+```bash
+xcrun simctl boot "iPhone 17 Pro"
+```
+
+Install your app on it, since a fresh simulator has nothing to mirror but the home screen:
+
+```bash
+xcrun simctl install booted /path/to/YourApp.app
+```
+
+iOS element detection and input need `idb` in addition to Xcode:
+
+```bash
+brew tap facebook/fb && brew install idb-companion && pip3 install fb-idb
+```
+
+Without `idb` the picker will tell you rather than opening a mirror whose taps silently do
+nothing.
+
+### The nav bar
+
+The bar under the mirror matches the platform, because the two do not have the same buttons:
+
+| | Buttons |
+|---|---|
+| **Android** | Back · Home · Recents · Reload |
+| **iOS** | Home · App Switcher · Lock · Reload |
+
+iOS has no system Back or Recents key, so the bar does not pretend otherwise. **To go back on
+iOS, swipe from the left edge of the mirror** — the same gesture you would use on the device.
+App Switcher double-presses Home, and Lock uses the side button.
+
+Where a step is recorded, it is identical across platforms: Maestro maps `back` and `pressKey`
+onto each platform's own behaviour.
+
+Recording follows the same rule everywhere: Back, Home and Lock write a step; App Switcher,
+Recents and Reload drive the device or panel without recording, since Maestro has no
+equivalent command.
+
+### Keyboard shortcuts
+
+| Action | macOS | Windows / Linux |
+|---|---|---|
+| Command Palette | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> |
+| Switch environment | <kbd>Cmd</kbd>+<kbd>Alt</kbd>+<kbd>E</kbd> | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>E</kbd> |
+| Run the flow | Play button in the editor gutter, or the Testing sidebar | same |
+
+## Requirements
+
+| For | You need |
+|---|---|
+| Android | `adb` on your `PATH` ([platform-tools](https://developer.android.com/tools/releases/platform-tools)) |
+| iOS Simulator | Xcode, plus [`idb`](https://fbidb.io) for element detection and input |
+| Running flows | [Maestro](https://maestro.dev/docs/getting-started/installing-maestro) |
+| Schema + autocomplete | [YAML by Red Hat](https://marketplace.visualstudio.com/items?itemName=redhat.vscode-yaml) |
+
+## Known limits
+
+Stated plainly, because discovering them yourself is worse:
+
+- **Android keyboard taps are not recorded.** The IME is a separate window that
+  `uiautomator dump` does not include, so no honest selector exists for a key. Taps still type
+  on the device; use **Input text** to record typing, which is how Maestro represents it.
+- **`uiautomator dump` fails while another tool holds UiAutomation.** A leftover Maestro or
+  Appium driver blocks it. Flow Recorder detects this and names the process to stop, rather
+  than showing an empty overlay.
+- **iOS: simulators only.** Physical devices need `idb` companion pairing and a signed
+  WebDriverAgent.
+- **Orientation and airplane mode are Android-only.** iOS reports them as unsupported rather
+  than failing quietly.
+
+## Telemetry
+
+Off by default. If you enable `flowRecorder.telemetry.enabled`, three anonymous counts are
+sent — mirror opened, step recorded, flow run — and nothing else. No file contents, selectors,
+device ids, paths or typed text. VS Code's own telemetry setting must also be on.
+
+## Contributing
+
+Issues and PRs welcome at [github.com/podupu/flow-recorder](https://github.com/podupu/flow-recorder).
 
 ```bash
 npm install
 npm run compile
+npm run test:unit
 ```
 
-Then press `F5` in VS Code (with this folder open) to launch an Extension
-Development Host window. In that window, open
-`examples/example.flow.yaml` - it should open in the visual editor instead
-of as plain text. Try the toolbar buttons; new steps get appended to the
-real YAML file, which you can also inspect by right-clicking the tab and
-choosing "Reopen Editor With..." -> "Text Editor".
+Press <kbd>F5</kbd> to launch an Extension Development Host.
 
-## Android device mirror (Phase 1)
+## Licence
 
-There's now a real, working Android recording path: **Flow Recorder: Start
-Android Mirror** (Command Palette).
-
-**Prerequisites**
-
-- `adb` installed and on your `PATH` (comes with Android SDK
-  platform-tools, or `brew install android-platform-tools` on macOS).
-- Either a running Android emulator, or a real device connected over USB
-  with USB debugging enabled and authorized.
-- A `.flow.yaml` file open and active in the editor - the mirror always
-  records into whichever flow is currently open.
-
-**Usage**
-
-1. Open a `.flow.yaml` file (e.g. `examples/example.flow.yaml`).
-2. Run **Flow Recorder: Start Android Mirror** from the Command Palette.
-   If more than one device is connected you'll be asked which one to use.
-3. A panel opens beside your editor showing the device's screen (polled
-   screenshots, refreshed roughly every 700ms).
-4. Click anywhere on the mirrored screen. This taps the real device at
-   that point, dumps the current UI hierarchy, and appends a step to your
-   flow - preferring a readable selector (`tapOn: { text: ... }` /
-   `id: ...`) and falling back to a percentage coordinate
-   (`tapOn: { point: "42%,63%" }`) when no labeled element is found.
-
-**What's real vs. what's next**
-
-- The mirror shows the real device screen with **highlight boxes drawn
-  over selectable elements** on load; hovering a box brightens it and
-  shows its selector in a tooltip. Recording a gesture is as easy as
-  interacting with the mirrored screen: **tap** (the hovered element's
-  selector, or `point: "x%,y%"` for empty space), **long press**,
-  **double tap**, and **swipe**.
-- The mirror toolbar drives device actions from the editor: **text
-  input** and **erase**; keys (Back/Home/Enter, hide keyboard);
-  **orientation** (landscape/portrait); **app lifecycle** (launch/stop/
-  kill, clear state); **clipboard** (set/paste); **network** (airplane
-  mode); **dark mode**; **screenshot** (saves a PNG to `assets/`);
-  **scroll**; and **asserts** (visible/not visible on the hovered
-  element). An "optional" checkbox stamps new steps with
-  `optional: true`.
-- The editor toolbar has a **+ Command** menu that appends typed Maestro
-  commands (`assertVisible`, `assertNotVisible`, `waitForAnimationToEnd`,
-  `extendedWaitUntil`, `openLink`, `runFlow`, `copyTextFrom`), and each
-  block's "optional" toggle round-trips with the YAML on disk.
-- These device-facing pieces are implemented and compile clean, but they
-  still need **manual on-device verification** against a real
-  emulator/device before they're relied on in a recording.
-- The live view uses **polled screenshots**, not real-time video. This was
-  the deliberate, verified-reliable choice for this pass - it doesn't
-  depend on any binary wire protocol, so there's nothing that can silently
-  be wrong in a way I can't check from here.
-- **Real-time video mirroring (scrcpy + WebCodecs)** is the natural next
-  upgrade (see the architecture notes from the earlier research), but
-  scrcpy's server communicates over a raw socket protocol that genuinely
-  needs a physical device/emulator to iterate against and confirm byte-for-
-  byte - not something to hand you as "done" without that loop. Once
-  you've confirmed the screenshot-based flow works against your own
-  device, that's the natural next thing to build, with you able to test
-  each step directly.
-- `captureScreenshotStub` in `src/recorder.ts` (the older, generic
-  "Screenshot block" button in the base editor toolbar) is now superseded
-  by the real Android mirror above for Android; it's still a placeholder
-  for a future iOS path.
-
-## Natural next steps
-
-- Swap polled screenshots for scrcpy + WebCodecs video once verified
-  against real hardware (biggest UX upgrade).
-- Replace the `prompt()`-based API block form with a proper inline form
-  (method dropdown, URL field, header/body editors) in `media/main.js`.
-- Add reordering (drag-and-drop) of steps in the webview.
-- Add a "run flow" command that replays all steps (API calls for real,
-  UI steps via adb, once you're happy with the recording format).
-- Build the iOS equivalent of the mirror panel (WebDriverAgent + MJPEG for
-  simulators; see the architecture research for the real-device path).
+MIT — see [LICENSE](LICENSE).
