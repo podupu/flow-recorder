@@ -93,6 +93,17 @@ export function parseIosScreenSize(raw: any[]): IosSize | undefined {
   return best;
 }
 
+/**
+ * True when the hierarchy carries nothing measurable - the signature of a simulator whose
+ * screen is locked or asleep, which reports a single Application element sized 0x0 rather
+ * than an error. Distinguishing it matters: the fix is to wake the device, not to report that
+ * iOS support is broken.
+ */
+export function isBlankHierarchy(raw: any): boolean {
+  if (!Array.isArray(raw) || raw.length === 0) return true;
+  return raw.every((entry) => !frameOf(entry));
+}
+
 export function iosSelector(
   element: { text?: string; resourceId?: string },
   x: number,
@@ -120,7 +131,20 @@ export function parseIosElements(raw: any, screen: IosSize): NormalisedElement[]
     const frame = clipToScreen(raw_, screen);
     if (!frame) continue;
 
-    const text = cleanText(entry.AXLabel) || cleanText(entry.title);
+    // UIKit puts an element's own text into AXValue, not AXLabel, unless the app sets an
+    // explicit accessibility label: a field's placeholder ("First Name", "Email Address") and
+    // - just as often - the body copy of a StaticText or Link. Without this fallback those
+    // elements have no text and are silently unselectable, which is indistinguishable from
+    // "not detected". On a portal/webview-style app, where nearly all visible copy is
+    // StaticText, that means effectively NO text is found while the boxes still draw.
+    //
+    // Deliberately an allowlist of text-BEARING types rather than a denylist. For a Slider
+    // AXValue is "50%" and for a Switch it is "1" - those are state, not content, and using
+    // them as a label would be actively misleading rather than merely unhelpful.
+    // (SecureTextField and SearchField match via the TextField/SearchField substrings.)
+    const carriesTextInValue = /TextField|TextView|StaticText|SearchField|Link/i.test(String(entry.type || ''));
+    const text =
+      cleanText(entry.AXLabel) || cleanText(entry.title) || (carriesTextInValue ? cleanText(entry.AXValue) : undefined);
     const resourceId = cleanText(entry.AXUniqueId);
     // Centre of the VISIBLE portion, so a point selector targets somewhere tappable.
     const centreX = frame.x + frame.width / 2;
