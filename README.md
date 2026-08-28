@@ -131,14 +131,19 @@ emulators, and iOS Simulators:
 
 ```
 Android
-  emulator-5554                    emulator
-iOS Simulators
+  emulator-5554                    emulator · running
+  Pixel_9                          emulator · will boot
+iOS Simulators · running
   iPhone 17 Pro                    iOS 26.5 · booted
-  iPhone 17 Pro Max                iOS 26.5 · will boot
+iOS Simulators · iOS 26.5
+  iPhone 17 Pro Max                will boot
+iOS Simulators · iOS 18.5
+  iPhone 15                        will boot
 ```
 
-Anything marked **will boot** is started for you, so you do not need to launch a simulator
-first. If the list is empty, start a device using the commands below.
+Running devices come first, then simulators grouped by OS version, **newest first**. Anything
+marked **will boot** is started for you — including stopped Android emulators — so you do not
+need to launch anything beforehand.
 
 ### Android
 
