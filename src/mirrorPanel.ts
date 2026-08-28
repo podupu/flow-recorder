@@ -1,11 +1,14 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
 import { isFlowDocument } from './flowContext';
 import { DeviceDriver, DeviceElement, UnsupportedOperationError } from './deviceDriver';
 
 import { classifySwipeDirection } from './gestures';
 import { navButtonsFor, navActionSpecFor } from './deviceNav';
 import { saveScreenshotBesideFlow } from './screenshotCapture';
+import { InstalledApp } from './installedApps';
 import { appendFlowStep, parseFlowDocument } from './flowDocument';
+import { findAccessibilityGaps, describeGaps } from './coverage';
 
 /** Fallback selector when a point resolves to no labelled element. */
 function pointSelector(x: number, y: number, screen: { width: number; height: number }) {
@@ -50,6 +53,8 @@ export class MirrorPanel {
   private dumping = false;
   /** Last reported hierarchy problem, so the 2.5s poll does not spam notifications. */
   private hierarchyProblem: string | undefined;
+  /** Set only for a recoverable UiAutomation conflict, so Reload knows what to force-stop. */
+  private recoverableDrivers: string[] = [];
   private keyboardShowing = false;
   private activeEditorSub: vscode.Disposable | undefined;
   private optional = false;
@@ -178,11 +183,16 @@ export class MirrorPanel {
       this.panel.webview.postMessage({
         type: 'elements',
         nodes: this.allElements,
-        keyboard
+        keyboard,
+        // A screen can detect perfectly and still have whole regions the app hides from
+        // accessibility. Reported alongside the elements so the panel can say which it is
+        // looking at rather than leaving an empty area looking like a recorder failure.
+        coverageNote: describeGaps(findAccessibilityGaps(this.allElements))
       });
       // Recovered - clear any standing problem banner and re-arm the one-shot notification.
       if (this.hierarchyProblem) {
         this.hierarchyProblem = undefined;
+        this.recoverableDrivers = [];
         this.panel.webview.postMessage({ type: 'hierarchyOk' });
       }
     } catch (err: any) {
@@ -217,6 +227,7 @@ export class MirrorPanel {
    */
   private reportHierarchyFailure(err: any): void {
     const message: string = err?.message || 'Element hierarchy could not be read.';
+    this.recoverableDrivers = this.driver.recoverableDriversFor(err);
     this.panel.webview.postMessage({ type: 'hierarchyError', text: message });
     if (this.hierarchyProblem === message) return;
     this.hierarchyProblem = message;
@@ -392,6 +403,19 @@ export class MirrorPanel {
     // reports the result, so the button visibly does something.
     const isReload = action === 'reload';
     if (isReload) {
+      // Top priority: a known-recoverable UiAutomation conflict is cleared before anything
+      // else runs, since every dump will keep failing identically otherwise.
+      if (this.recoverableDrivers.length) {
+        this.panel.webview.postMessage({
+          type: 'status',
+          text: `Stopping ${this.recoverableDrivers.join(', ')}...`
+        });
+        const stopped = await this.driver.killConflictingAutomation();
+        this.recoverableDrivers = [];
+        if (stopped.length) {
+          vscode.window.showInformationMessage(`Stopped ${stopped.join(', ')} - retrying element detection.`);
+        }
+      }
       this.panel.webview.postMessage({ type: 'status', text: 'Refreshing screen and elements...' });
     }
     await this.pushFrame();
@@ -586,16 +610,81 @@ export class MirrorPanel {
     }
   }
 
-  private appId(): string | undefined {
-    return this.currentAppId;
+  /**
+   * Resolves the app to act on: the flow's `appId` when it declares one, otherwise a pick from
+   * what is actually installed on the device.
+   *
+   * Prompting only when the flow is silent matters - a flow that names its app should never be
+   * second-guessed, and a flow that does not should not fall back to a guess. This used to
+   * launch a fabricated `com.example.app`, which failed on any real device.
+   */
+  private async resolveAppId(): Promise<string | undefined> {
+    const declared = this.currentAppId;
+    if (declared && !declared.includes('${')) return declared;
+
+    // `appId: ${APP_BUNDLE_ID}` is resolved by Maestro at run time, not by us.
+    if (declared && declared.includes('${')) {
+      vscode.window.showInformationMessage(
+        `This flow uses ${declared} for its appId, which Maestro substitutes at run time. Pick an installed app to launch now.`
+      );
+    }
+
+    let apps: InstalledApp[] = [];
+    try {
+      apps = await this.driver.listApps();
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`Could not list installed apps: ${err.message}`);
+      return undefined;
+    }
+    if (!apps.length) {
+      vscode.window.showErrorMessage('No apps found on the device. Install the app first.');
+      return undefined;
+    }
+
+    const picked = await vscode.window.showQuickPick(
+      apps.map((a) => ({
+        label: a.name || a.bundleId,
+        description: a.name ? a.bundleId : undefined,
+        detail: a.isSystem ? 'system app' : undefined,
+        bundleId: a.bundleId
+      })),
+      { placeHolder: 'Which app should this flow launch?', matchOnDescription: true }
+    );
+    if (!picked) return undefined;
+
+    await this.offerToRecordAppId(picked.bundleId);
+    return picked.bundleId;
+  }
+
+  /** Writing the choice into the flow keeps it runnable outside VS Code. */
+  private async offerToRecordAppId(appId: string): Promise<void> {
+    if (this.currentAppId) return;
+    const choice = await vscode.window.showInformationMessage(
+      `Set appId: ${appId} in this flow?`,
+      'Set appId',
+      'Not now'
+    );
+    if (choice !== 'Set appId') return;
+
+    try {
+      const document = await vscode.workspace.openTextDocument(this.flowUri);
+      const edit = new vscode.WorkspaceEdit();
+      const text = document.getText();
+      if (!text.trim()) {
+        edit.insert(this.flowUri, new vscode.Position(0, 0), `appId: ${appId}\n---\n`);
+      } else {
+        edit.insert(this.flowUri, new vscode.Position(0, 0), `appId: ${appId}\n`);
+      }
+      await vscode.workspace.applyEdit(edit);
+    } catch (err: any) {
+      vscode.window.showWarningMessage(`Could not write appId into the flow: ${err.message}`);
+    }
   }
 
   private async handleLaunchApp(clearState: boolean): Promise<void> {
-    const appId = this.appId();
-    if (!appId) {
-      vscode.window.showErrorMessage('No appId in the flow config - add one to launch the app.');
-      return;
-    }
+    const appId = await this.resolveAppId();
+    if (!appId) return;
+
     try {
       if (clearState) await this.driver.clearState(appId);
       await this.driver.launchApp(appId);
@@ -608,11 +697,8 @@ export class MirrorPanel {
   }
 
   private async handleStopApp(): Promise<void> {
-    const appId = this.appId();
-    if (!appId) {
-      vscode.window.showErrorMessage('No appId in the flow config - add one to use this command.');
-      return;
-    }
+    const appId = await this.resolveAppId();
+    if (!appId) return;
     try {
       await this.driver.stopApp(appId);
     } catch (err: any) {
@@ -623,11 +709,8 @@ export class MirrorPanel {
   }
 
   private async handleKillApp(clearState: boolean): Promise<void> {
-    const appId = this.appId();
-    if (!appId) {
-      vscode.window.showErrorMessage('No appId in the flow config - add one to use this command.');
-      return;
-    }
+    const appId = await this.resolveAppId();
+    if (!appId) return;
     try {
       await this.driver.killApp(appId, clearState);
     } catch (err: any) {
@@ -638,11 +721,8 @@ export class MirrorPanel {
   }
 
   private async handleClearState(): Promise<void> {
-    const appId = this.appId();
-    if (!appId) {
-      vscode.window.showErrorMessage('No appId in the flow config - add one to use this command.');
-      return;
-    }
+    const appId = await this.resolveAppId();
+    if (!appId) return;
     try {
       await this.driver.clearState(appId);
     } catch (err: any) {
@@ -743,23 +823,51 @@ export class MirrorPanel {
     await this.emit(visible ? { assertVisible: selector } : { assertNotVisible: selector });
   }
 
+  /**
+   * Read a webview asset from disk so it can be inlined into the HTML.
+   *
+   * These were previously loaded as separate resources via `asWebviewUri`. That is the
+   * documented pattern, and it is the one that kept failing: VS Code's webview service worker
+   * caches resources on DISK, keyed by URI, and that cache survives window reloads, editor
+   * restarts and extension reinstalls. Because the extension version stayed at 0.1.0 across
+   * rebuilds the URIs never changed, so the panel went on serving the FIRST build's JS and CSS
+   * while the files on disk were demonstrably new - several consecutive fixes appeared to do
+   * nothing at all, because the code being executed was never the code being edited.
+   *
+   * The HTML string is generated here on every panel open and assigned straight to
+   * `panel.webview.html`, so it never passes through that cache. Inlining moves the assets onto
+   * that path, removing the staleness failure mode outright rather than trying to out-run it
+   * with cache-busting query strings.
+   */
+  private readAsset(...segments: string[]): string {
+    const uri = vscode.Uri.joinPath(this.context.extensionUri, ...segments);
+    try {
+      // `</script` inside the payload would close the wrapping tag early. Nothing in these
+      // files contains it today, but a silently truncated panel is an expensive way to
+      // find out that changed.
+      return fs.readFileSync(uri.fsPath, 'utf8').replace(/<\/script/gi, '<\\/script');
+    } catch (err: any) {
+      return `/* Flow Recorder could not read ${segments.join('/')}: ${err.message} */`;
+    }
+  }
+
   private getHtml(): string {
-    const scriptUri = this.panel.webview.asWebviewUri(
-      vscode.Uri.joinPath(this.context.extensionUri, 'media', 'mirror.js')
-    );
-    const styleUri = this.panel.webview.asWebviewUri(
-      vscode.Uri.joinPath(this.context.extensionUri, 'media', 'mirror.css')
-    );
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <link rel="stylesheet" href="${styleUri}" />
+  <style>${this.readAsset('media', 'mirror.css')}</style>
 </head>
 <body>
   <div id="status">Connecting to device...</div>
   <div id="record-target">Recording into: <span id="record-target-path">-</span></div>
   <div id="hierarchy-banner" class="hidden"></div>
+  <!--
+    Distinct from the banner above: that one means detection FAILED, this one means
+    detection succeeded and the app simply has nothing accessible in part of the screen.
+    Conflating them sends the user hunting for a bug in the wrong codebase.
+  -->
+  <div id="coverage-note" class="hidden"></div>
   <div id="mirror-body">
     <div id="stage">
       <canvas id="screen"></canvas>
@@ -778,6 +886,17 @@ export class MirrorPanel {
         )
         .join('\n      ')}
       <span class="nav-sep"></span>
+      <button type="button" id="show-all-btn" class="nav-btn" title="Show all detected elements, numbered like Maestro Studio" aria-label="Show all elements" aria-pressed="false">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="2.5"/></svg>
+      </button>
+      <!--
+        Reports what the overlay actually received and drew. Element detection failing, the
+        webview running a stale cached build, and a CSS problem hiding the boxes all look
+        identical from outside - "nothing is highlighted" - and that ambiguity cost several
+        rounds of misdiagnosis. This makes the three states tell themselves apart.
+      -->
+      <span id="element-count" title="Elements received from the device / boxes drawn">-</span>
+      <span class="nav-sep"></span>
       <span id="zoom-controls">
         <button type="button" class="zoom-btn" data-zoom="out" title="Zoom out" aria-label="Zoom out">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 12h12"/></svg>
@@ -790,7 +909,7 @@ export class MirrorPanel {
     </div>
   </div>
   <div id="context-menu" class="hidden"></div>
-  <script src="${scriptUri}"></script>
+  <script>${this.readAsset('media', 'mirror.js')}</script>
 </body>
 </html>`;
   }
