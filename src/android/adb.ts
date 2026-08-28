@@ -284,12 +284,35 @@ export async function pasteText(deviceId: string): Promise<void> {
   await execAdb(['-s', deviceId, 'shell', 'input', 'keyevent', '279']);
 }
 
+/** Third-party packages; -3 excludes the hundreds of system ones. */
+export async function listPackages(deviceId: string): Promise<string> {
+  const out = await execAdb(['-s', deviceId, 'shell', 'pm', 'list', 'packages', '-3']);
+  return out.toString('utf8');
+}
+
 export async function launchApp(deviceId: string, appId: string): Promise<void> {
   await execAdb(['-s', deviceId, 'shell', 'monkey', '-p', appId, '-c', 'android.intent.category.LAUNCHER', '1']);
 }
 
 export async function stopApp(deviceId: string, appId: string): Promise<void> {
   await execAdb(['-s', deviceId, 'shell', 'am', 'force-stop', appId]);
+}
+
+/**
+ * Force-stops every currently running automation driver (a leaked Maestro or Appium process
+ * holding UiAutomation), so element detection can recover without the user having to run adb
+ * by hand. Returns the packages actually stopped.
+ */
+export async function killAutomationDrivers(deviceId: string): Promise<string[]> {
+  const drivers = await getRunningAutomationDrivers(deviceId);
+  for (const driver of drivers) {
+    try {
+      await stopApp(deviceId, driver);
+    } catch {
+      // Best-effort - a driver that refuses to stop is reported by the caller, not thrown here.
+    }
+  }
+  return drivers;
 }
 
 export async function killApp(deviceId: string, appId: string, shouldClearState: boolean): Promise<void> {

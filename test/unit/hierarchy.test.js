@@ -127,3 +127,22 @@ describe('actionable error messages', () => {
     assert.ok(err.message.includes('com.mahoraga.portal'));
   });
 });
+
+describe('deciding whether reload can auto-recover', () => {
+  const { canAutoRecoverHierarchy } = require('../../out/android/hierarchy');
+
+  it('recovers a uiautomation conflict when a driver is named', () => {
+    assert.strictEqual(canAutoRecoverHierarchy('uiautomation-conflict', ['dev.mobile.maestro']), true);
+  });
+
+  it('does not attempt recovery when no driver was identified', () => {
+    // Nothing to force-stop - the conflict may be an accessibility service instead.
+    assert.strictEqual(canAutoRecoverHierarchy('uiautomation-conflict', []), false);
+  });
+
+  it('does not attempt recovery for reasons force-stopping a driver cannot fix', () => {
+    assert.strictEqual(canAutoRecoverHierarchy('missing-file', ['dev.mobile.maestro']), false);
+    assert.strictEqual(canAutoRecoverHierarchy('empty', ['dev.mobile.maestro']), false);
+    assert.strictEqual(canAutoRecoverHierarchy('unknown', ['dev.mobile.maestro']), false);
+  });
+});

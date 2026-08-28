@@ -87,7 +87,20 @@ export async function screenshot(udid: string): Promise<Buffer> {
 }
 
 export async function describeAll(udid: string): Promise<any[]> {
-  const out = await exec(idbCommand(), ['ui', 'describe-all', '--udid', udid]);
+  let out: string;
+  try {
+    out = await exec(idbCommand(), ['ui', 'describe-all', '--udid', udid]);
+  } catch (err: any) {
+    // idb reports a shut-down simulator as an accessibility failure, which reads as a bug in
+    // element detection rather than "the device is off".
+    if (/not booted|cannot spawn companion|no such (device|target)/i.test(err.message)) {
+      throw new Error(
+        'The simulator is shut down. Boot it (or pick it again from the device list, which ' +
+          'boots it for you) and reopen the mirror.'
+      );
+    }
+    throw err;
+  }
   const parsed = JSON.parse(out);
   return Array.isArray(parsed) ? parsed : [];
 }
@@ -144,6 +157,11 @@ export async function pressButton(udid: string, button: string): Promise<void> {
 /** HID keycodes, used for Enter (40) and Backspace (42). */
 export async function pressKeycode(udid: string, keycode: number): Promise<void> {
   await exec(idbCommand(), ['ui', 'key', '--udid', udid, String(keycode)]);
+}
+
+/** Raw `simctl listapps` output; an old-style plist, parsed in installedApps.ts. */
+export async function listApps(udid: string): Promise<string> {
+  return exec('xcrun', ['simctl', 'listapps', udid], 30000);
 }
 
 export async function launchApp(udid: string, bundleId: string): Promise<void> {

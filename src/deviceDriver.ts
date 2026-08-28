@@ -7,6 +7,8 @@
  * has to know which platform it is talking to.
  */
 
+import { InstalledApp } from './installedApps';
+
 export type DevicePlatform = 'Android' | 'iOS';
 
 export interface DeviceSize {
@@ -73,6 +75,8 @@ export interface DeviceDriver {
   back(): Promise<void>;
   hideKeyboard(): Promise<void>;
 
+  /** Apps installed on the device, so a launch can offer real bundle ids. */
+  listApps(): Promise<InstalledApp[]>;
   launchApp(appId: string): Promise<void>;
   stopApp(appId: string): Promise<void>;
   killApp(appId: string, clearState: boolean): Promise<void>;
@@ -83,4 +87,19 @@ export interface DeviceDriver {
   pasteText(): Promise<void>;
   setAirplaneMode(enabled: boolean): Promise<void>;
   setDarkMode(enabled: boolean): Promise<void>;
+
+  /**
+   * Force-stops any leaked automation driver (Maestro, Appium) holding the platform's single
+   * UiAutomation-equivalent connection, so element detection can recover on its own. Returns
+   * the packages/bundle ids actually stopped, so the caller can say what it did.
+   */
+  killConflictingAutomation(): Promise<string[]>;
+
+  /**
+   * For an error this driver threw (typically from `elements()`), the drivers that Reload
+   * should force-stop to recover automatically - or an empty array when the failure needs a
+   * different fix, or a human. Kept on the driver rather than in the panel so the panel never
+   * has to know a platform-specific error shape.
+   */
+  recoverableDriversFor(err: unknown): string[];
 }
