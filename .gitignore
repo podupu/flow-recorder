@@ -6,3 +6,6 @@ out/
 
 # Maestro debug artifacts from the Testing view
 .maestro-debug/
+
+# Temporary flows written when running from a single step
+.flow-recorder-step-*.flow.yaml

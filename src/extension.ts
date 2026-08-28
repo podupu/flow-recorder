@@ -3,13 +3,16 @@ import { FlowEditorProvider } from './flowEditorProvider';
 import { FlowLinkProvider } from './flowLinkProvider';
 import { EnvironmentController } from './envStatusBar';
 import { FlowTestController } from './flowTestController';
-import { AndroidMirrorPanel } from './mirrorPanel';
+import { MirrorPanel } from './mirrorPanel';
 import { parseFlowDocument, insertFlowStepsAtLine } from './flowDocument';
 import { runApiRequest } from './recorder';
 import { buildApiSteps, parseHeaderLine } from './maestroApi';
 import { saveScreenshotBesideFlow, resolveCaptureDevice } from './screenshotCapture';
-import * as adb from './android/adb';
+import { pickDevice } from './devicePicker';
+import { diagnoseSelectors, disposeDiagnostics } from './diagnoseCommand';
 import { registerMaestroFlowSchema } from './yamlSchema';
+import { isFlow, isFlowDocument, registerFlowContext } from './flowContext';
+import { showFlowDiagnostics } from './flowDiagnostics';
 
 /**
  * .flow.yaml files open in our CustomTextEditorProvider (a webview), and VS Code does NOT
@@ -22,7 +25,7 @@ function flowUriFromTab(tab: vscode.Tab | undefined): vscode.Uri | undefined {
   const input = tab?.input;
   if (
     (input instanceof vscode.TabInputCustom || input instanceof vscode.TabInputText) &&
-    input.uri.fsPath.endsWith('.flow.yaml')
+    isFlow(input.uri.fsPath)
   ) {
     return input.uri;
   }
@@ -37,7 +40,7 @@ async function getActiveFlowDocument(): Promise<vscode.TextDocument | undefined>
   }
 
   const active = vscode.window.activeTextEditor;
-  if (active && active.document.fileName.endsWith('.flow.yaml')) {
+  if (active && isFlowDocument(active.document)) {
     return active.document;
   }
 
@@ -71,8 +74,8 @@ async function getActiveFlowDocument(): Promise<vscode.TextDocument | undefined>
 /** The .flow.yaml text editor the command was invoked from. */
 function activeFlowEditor(): vscode.TextEditor | undefined {
   const editor = vscode.window.activeTextEditor;
-  if (editor && editor.document.fileName.endsWith('.flow.yaml')) return editor;
-  vscode.window.showErrorMessage('Open a .flow.yaml file in the editor to add a step.');
+  if (editor && isFlowDocument(editor.document)) return editor;
+  vscode.window.showErrorMessage('Open a Maestro flow in the editor to add a step.');
   return undefined;
 }
 
@@ -156,11 +159,11 @@ async function promptAndInsertScreenshotBlock(): Promise<void> {
   });
   if (name === undefined) return;
 
-  const deviceId = await resolveCaptureDevice(AndroidMirrorPanel.current?.deviceId);
-  if (!deviceId) return;
+  const captureDriver = await resolveCaptureDevice(MirrorPanel.current?.driver);
+  if (!captureDriver) return;
 
   try {
-    const rel = await saveScreenshotBesideFlow(editor.document.uri, deviceId, name);
+    const rel = await saveScreenshotBesideFlow(editor.document.uri, captureDriver, name);
     await insertFlowStepsAtLine(editor.document, editor.selection.active.line, [{ takeScreenshot: rel }]);
     vscode.window.showInformationMessage(`Captured ${rel}`);
   } catch (err: any) {
@@ -184,7 +187,13 @@ export function activate(context: vscode.ExtensionContext) {
   // SchemaStore mis-matches *.flow.yaml to Estuary Flow; point it at Maestro instead.
   void registerMaestroFlowSchema(context);
 
+  // Menus key off a context variable, so a custom flowPatterns setting still works.
+  context.subscriptions.push(...registerFlowContext());
+  context.subscriptions.push(disposeDiagnostics());
+
   context.subscriptions.push(
+    vscode.commands.registerCommand('flowRecorder.diagnoseSelectors', diagnoseSelectors),
+    vscode.commands.registerCommand('flowRecorder.showFlowDiagnostics', showFlowDiagnostics),
     vscode.commands.registerCommand('flowRecorder.addApiBlock', promptAndInsertApiBlock),
     vscode.commands.registerCommand('flowRecorder.addScreenshotBlock', promptAndInsertScreenshotBlock),
     vscode.commands.registerCommand('flowRecorder.openBlockView', async () => {
@@ -200,52 +209,25 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('flowRecorder.startAndroidMirror', async () => {
+    vscode.commands.registerCommand('flowRecorder.startMirror', async () => {
       const document = await getActiveFlowDocument();
       if (!document) {
         // A mirror already recording into a flow stays valid even when no flow tab is
         // focused - just bring it back rather than reporting a missing flow.
-        if (AndroidMirrorPanel.current) {
-          AndroidMirrorPanel.current.reveal();
+        if (MirrorPanel.current) {
+          MirrorPanel.current.reveal();
           return;
         }
         vscode.window.showErrorMessage(
-          'No .flow.yaml is open. Open the flow you want to record into (any tab group), then run this command again.'
+          'No Maestro flow is open. Open the flow you want to record into (any tab group), then run this command again. Flow Recorder looks for *.flow.yaml and .maestro/**/*.yaml - change flowRecorder.flowPatterns if your project differs.'
         );
         return;
       }
 
-      let devices: adb.AdbDevice[];
-      try {
-        devices = await adb.listDevices();
-      } catch (err: any) {
-        vscode.window.showErrorMessage(
-          `Could not run adb. Is Android platform-tools installed and on your PATH? (${err.message})`
-        );
-        return;
-      }
+      const driver = await pickDevice();
+      if (!driver) return;
 
-      const online = devices.filter((d) => d.state === 'device');
-      if (online.length === 0) {
-        vscode.window.showErrorMessage(
-          'No connected Android devices or emulators found. Start an emulator, or plug in a device with USB debugging enabled, then try again.'
-        );
-        return;
-      }
-
-      let deviceId: string;
-      if (online.length === 1) {
-        deviceId = online[0].id;
-      } else {
-        const picked = await vscode.window.showQuickPick(
-          online.map((d) => ({ label: d.id, description: d.isEmulator ? 'emulator' : 'device' })),
-          { placeHolder: 'Select an Android device' }
-        );
-        if (!picked) return;
-        deviceId = picked.label;
-      }
-
-      await AndroidMirrorPanel.createOrShow(context, deviceId, document.uri);
+      await MirrorPanel.createOrShow(context, driver, document.uri);
     })
   );
 }

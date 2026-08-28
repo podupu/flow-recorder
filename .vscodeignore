@@ -1,0 +1,23 @@
+# Source and build inputs - only out/ ships.
+src/**
+test/**
+scripts/**
+docs/**
+examples/**
+**/*.ts
+**/tsconfig.json
+**/.eslintrc*
+
+# Working notes, not product docs
+research.md
+notes.md
+*.vsix
+
+# Dev-only config
+.vscode/**
+.github/**
+.gitignore
+maestro-env.json
+**/*.map
+
+# Keep: out/, media/, schemas/, images/, README.md, CHANGELOG.md, LICENSE
