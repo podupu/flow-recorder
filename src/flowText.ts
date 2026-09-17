@@ -11,6 +11,15 @@ import * as yaml from 'js-yaml';
 
 /** Serialises one step as a YAML sequence item, e.g. `- tapOn:\n    text: Login\n`. */
 export function stepToYamlItem(step: any): string {
+  if (
+    step &&
+    typeof step === 'object' &&
+    !Array.isArray(step) &&
+    Object.keys(step).length === 1 &&
+    Object.values(step)[0] === null
+  ) {
+    return `- ${Object.keys(step)[0]}:\n`;
+  }
   // lineWidth: -1 disables folding; a wrapped `${...}` expression would no longer parse.
   return yaml.dump([step], { lineWidth: -1 });
 }

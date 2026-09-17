@@ -94,10 +94,9 @@ export function parseIosScreenSize(raw: any[]): IosSize | undefined {
 }
 
 /**
- * True when the hierarchy carries nothing measurable - the signature of a simulator whose
- * screen is locked or asleep, which reports a single Application element sized 0x0 rather
- * than an error. Distinguishing it matters: the fix is to wake the device, not to report that
- * iOS support is broken.
+ * True when the hierarchy carries nothing measurable. A sleeping simulator can report a
+ * single Application element sized 0x0, but startup or accessibility-tool compatibility
+ * failures can also produce no bounds. This alone does not establish the device lock state.
  */
 export function isBlankHierarchy(raw: any): boolean {
   if (!Array.isArray(raw) || raw.length === 0) return true;

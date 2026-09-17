@@ -2,6 +2,7 @@ import { execFile } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { isBlankHierarchy } from './iosElements';
 
 /**
  * iOS Simulator control.
@@ -64,8 +65,21 @@ export async function listSimulators(): Promise<IosSimulator[]> {
   return sims;
 }
 
+/**
+ * Wait for boot completion, even when the device already reports "Booted". `simctl boot`
+ * only starts booting; accessibility may still return zero-sized frames at that point.
+ * -b also handles a device started by Xcode since the picker snapshot without an
+ * "already booted" error. Keep a finite timeout for a runtime that cannot finish starting.
+ */
 export async function bootSimulator(udid: string): Promise<void> {
-  await exec('xcrun', ['simctl', 'boot', udid], 120000);
+  try {
+    await exec('xcrun', ['simctl', 'bootstatus', udid, '-b'], 180000);
+  } catch (err: any) {
+    throw new Error(
+      `Could not finish preparing the iOS simulator. Open Simulator to check its startup ` +
+      `progress, then select the device again. ${err.message}`
+    );
+  }
 }
 
 /**
@@ -86,23 +100,46 @@ export async function screenshot(udid: string): Promise<Buffer> {
   }
 }
 
-export async function describeAll(udid: string): Promise<any[]> {
-  let out: string;
-  try {
-    out = await exec(idbCommand(), ['ui', 'describe-all', '--udid', udid]);
-  } catch (err: any) {
-    // idb reports a shut-down simulator as an accessibility failure, which reads as a bug in
-    // element detection rather than "the device is off".
-    if (/not booted|cannot spawn companion|no such (device|target)/i.test(err.message)) {
-      throw new Error(
-        'The simulator is shut down. Boot it (or pick it again from the device list, which ' +
-          'boots it for you) and reopen the mirror.'
-      );
-    }
-    throw err;
-  }
+// Keep working older runtimes on their existing API. Once the host AX translation fails,
+// reuse the guest reader instead of retrying the broken host API on every poll.
+const guestAccessibilityDevices = new Set<string>();
+
+async function readAccessibility(udid: string, guest: boolean): Promise<any[]> {
+  const args = ['ui', 'describe-all', '--udid', udid];
+  if (guest) args.push('--api', 'axbridge');
+  const out = await exec(idbCommand(), args);
   const parsed = JSON.parse(out);
-  return Array.isArray(parsed) ? parsed : [];
+  if (!Array.isArray(parsed)) throw new Error('idb returned an unexpected accessibility response (expected an array).');
+  return parsed;
+}
+
+export async function describeAll(udid: string): Promise<any[]> {
+  if (!guestAccessibilityDevices.has(udid)) {
+    try {
+      const raw = await readAccessibility(udid, false);
+      if (!isBlankHierarchy(raw)) return raw;
+    } catch (err: any) {
+      // Modern companions report this failure explicitly; 1.1.8 instead serializes a
+      // null translation into one all-null, zero-sized node. Both need the guest API.
+      if (!/no translation object/i.test(err.message)) throw err;
+    }
+  }
+
+  try {
+    const raw = await readAccessibility(udid, true);
+    if (isBlankHierarchy(raw)) {
+      throw new Error('The accessibility bridge returned no usable element bounds.');
+    }
+    guestAccessibilityDevices.add(udid);
+    return raw;
+  } catch (err: any) {
+    throw new Error(
+      'iOS accessibility could not be read through idb. This is not evidence that the screen is locked. ' +
+      'For Xcode 27 / iOS 27, use fb-idb and idb-companion 1.5.9 or newer, and restart any ' +
+      'companion processes left running from an older installation. ' +
+      `Details: ${err.message}`
+    );
+  }
 }
 
 /** All coordinates below are in POINTS, the space idb and the hierarchy both use. */

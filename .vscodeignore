@@ -11,10 +11,15 @@ examples/**
 # Working notes, not product docs
 research.md
 notes.md
+CONTRIBUTING.md
 *.vsix
 
 # Dev-only config
 .vscode/**
+.kilo/**
+.claude/**
+.agents/**
+.codex/**
 .github/**
 .gitignore
 maestro-env.json

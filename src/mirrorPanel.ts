@@ -53,11 +53,13 @@ export class MirrorPanel {
   private dumping = false;
   /** Last reported hierarchy problem, so the 2.5s poll does not spam notifications. */
   private hierarchyProblem: string | undefined;
+  private frameProblem: string | undefined;
   /** Set only for a recoverable UiAutomation conflict, so Reload knows what to force-stop. */
   private recoverableDrivers: string[] = [];
   private keyboardShowing = false;
   private activeEditorSub: vscode.Disposable | undefined;
   private optional = false;
+  private recording = false;
   private darkMode = false;
   private disposed = false;
 
@@ -117,12 +119,8 @@ export class MirrorPanel {
   }
 
   private async init(): Promise<void> {
-    try {
-      this.screenSize = await this.driver.screenSize();
-    } catch (err: any) {
-      vscode.window.showErrorMessage(`Could not read device screen size: ${err.message}`);
-    }
     this.postTarget();
+    // A screenshot does not require accessibility or a known input coordinate space.
     this.startPolling();
     this.startElementPolling();
   }
@@ -155,9 +153,19 @@ export class MirrorPanel {
   private async pushFrame(): Promise<void> {
     try {
       const png = await this.driver.screenshot();
+      if (this.disposed) return;
       this.panel.webview.postMessage({ type: 'frame', data: png.toString('base64') });
-    } catch {
-      // Device briefly busy or reconnecting - the next poll tick catches up.
+      if (this.frameProblem) {
+        this.frameProblem = undefined;
+        this.panel.webview.postMessage({ type: 'frameOk' });
+      }
+    } catch (err: any) {
+      if (this.disposed) return;
+      const text = `Screen capture unavailable. Retrying automatically. ${err.message || err}`;
+      if (text !== this.frameProblem) {
+        this.frameProblem = text;
+        this.panel.webview.postMessage({ type: 'frameError', text });
+      }
     }
   }
 
@@ -167,18 +175,22 @@ export class MirrorPanel {
    * a forced refresh waits that dump out and then takes a fresh one.
    */
   private async refreshElements(force = false): Promise<void> {
-    if (!this.screenSize) return;
+    if (this.disposed) return;
     if (this.dumping) {
       if (!force) return;
       await this.waitForDumpToSettle();
-      if (this.disposed || !this.screenSize) return;
+      if (this.disposed || this.dumping) return;
     }
     this.dumping = true;
     try {
+      // Retry failed startup lookups on every poll, including an explicit Reload.
+      if (!this.screenSize) this.screenSize = await this.driver.screenSize();
       // Drivers hand back elements already normalised to 0-1 with selectors resolved, so
       // the panel stays free of any platform-specific hierarchy shape.
       this.allElements = await this.driver.elements();
+      this.screenSize = await this.driver.screenSize();
       const keyboard = await this.driver.keyboardRegion();
+      if (this.disposed) return;
       this.keyboardShowing = !!keyboard;
       this.panel.webview.postMessage({
         type: 'elements',
@@ -196,7 +208,7 @@ export class MirrorPanel {
         this.panel.webview.postMessage({ type: 'hierarchyOk' });
       }
     } catch (err: any) {
-      this.reportHierarchyFailure(err);
+      if (!this.disposed) this.reportHierarchyFailure(err);
     } finally {
       this.dumping = false;
     }
@@ -227,6 +239,8 @@ export class MirrorPanel {
    */
   private reportHierarchyFailure(err: any): void {
     const message: string = err?.message || 'Element hierarchy could not be read.';
+    this.allElements = [];
+    this.keyboardShowing = false;
     this.recoverableDrivers = this.driver.recoverableDriversFor(err);
     this.panel.webview.postMessage({ type: 'hierarchyError', text: message });
     if (this.hierarchyProblem === message) return;
@@ -235,6 +249,7 @@ export class MirrorPanel {
   }
 
   private async emit(step: any): Promise<void> {
+    if (!this.recording) return;
     if (this.optional) {
       const obj = typeof step === 'string' ? { [step]: null } : step;
       await this.writeStep({ ...obj, optional: true });
@@ -274,6 +289,10 @@ export class MirrorPanel {
 
   private async handleMessage(msg: any): Promise<void> {
     switch (msg.type) {
+      case 'setRecording':
+        this.recording = msg.value === true;
+        this.panel.webview.postMessage({ type: 'recordingState', recording: this.recording });
+        break;
       case 'optional':
         this.optional = !!msg.value;
         break;
@@ -420,7 +439,7 @@ export class MirrorPanel {
     }
     await this.pushFrame();
     await this.refreshElements(isReload);
-    if (isReload && !this.hierarchyProblem) {
+    if (isReload && !this.hierarchyProblem && !this.frameProblem) {
       this.panel.webview.postMessage({
         type: 'status',
         text: `Refreshed - ${this.allElements.length} elements${this.keyboardShowing ? ' (keyboard open)' : ''}`
@@ -692,7 +711,7 @@ export class MirrorPanel {
       vscode.window.showErrorMessage(`Failed to launch app: ${err.message}`);
       return;
     }
-    await this.emit(clearState ? { launchApp: { appId, clearState: true } } : { launchApp: { appId } });
+    await this.emit(clearState ? { launchApp: { clearState: true } } : { launchApp: null });
     void this.refreshElements();
   }
 
@@ -856,28 +875,35 @@ export class MirrorPanel {
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Device mirror</title>
   <style>${this.readAsset('media', 'mirror.css')}</style>
 </head>
 <body>
-  <div id="status">Connecting to device...</div>
-  <div id="record-target">Recording into: <span id="record-target-path">-</span></div>
-  <div id="hierarchy-banner" class="hidden"></div>
+  <div id="status" role="status" aria-atomic="true">Connecting to device...</div>
+  <div id="record-target">
+    <button id="recording-toggle" type="button" aria-pressed="false">Start recording</button>
+    <span id="recording-label" role="status">Control only — interactions do not change your flow.</span>
+    <div>Flow: <span id="record-target-path">-</span></div>
+  </div>
+  <div id="frame-banner" class="hidden" role="status" aria-atomic="true"></div>
+  <div id="hierarchy-banner" class="hidden" role="status" aria-atomic="true"></div>
   <!--
     Distinct from the banner above: that one means detection FAILED, this one means
     detection succeeded and the app simply has nothing accessible in part of the screen.
     Conflating them sends the user hunting for a bug in the wrong codebase.
   -->
   <div id="coverage-note" class="hidden"></div>
-  <div id="mirror-body">
+  <main id="mirror-body" aria-label="Device mirror and inspector">
     <div id="stage">
-      <canvas id="screen"></canvas>
-      <div id="overlay"></div>
+      <canvas id="screen" role="img" aria-label="Live device screen. Use the detected elements control below for keyboard actions."></canvas>
+      <div id="overlay" aria-hidden="true"></div>
       <div id="keyboard-mask"><span>System keyboard - not inspectable</span></div>
-      <div id="selection">
+      <div id="selection" aria-hidden="true">
         <span id="selection-badge"></span>
       </div>
     </div>
-    <div id="device-nav">
+    <div id="device-nav" role="group" aria-label="Device and view controls">
       ${navButtonsFor(this.driver.platform)
         .map(
           (b, i) =>
@@ -907,8 +933,14 @@ export class MirrorPanel {
         </button>
       </span>
     </div>
-  </div>
-  <div id="context-menu" class="hidden"></div>
+    <div id="element-controls">
+      <label for="element-picker">Detected elements</label>
+      <select id="element-picker" aria-describedby="element-help" disabled><option>Waiting for element detection…</option></select>
+      <button id="element-actions" type="button" aria-haspopup="dialog" disabled>Actions</button>
+      <p id="element-help">Choose an element, then open Actions to tap, type or add an assertion. Escape closes Actions.</p>
+    </div>
+  </main>
+  <div id="context-menu" class="hidden" role="dialog" aria-label="Device actions"></div>
   <script>${this.readAsset('media', 'mirror.js')}</script>
 </body>
 </html>`;

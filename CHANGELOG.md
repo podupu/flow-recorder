@@ -3,6 +3,35 @@
 All notable changes to Flow Recorder are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.3] - 2026-09-17
+
+### Changed
+
+- Device interactions no longer append flow steps by default. Use the explicit Start/Stop
+  recording control to enable or disable recording; new mirrors start with recording off.
+
+## [0.1.2] - 2026-09-17
+
+### Fixed
+
+- Use idb's guest accessibility bridge when the host API returns zero-sized elements or a
+  translation failure on iOS 27. Reuse the working backend for subsequent reads.
+- Stop automatically pressing Home when accessibility is unavailable.
+- Explain the required idb client/companion upgrade when the guest bridge is unavailable.
+
+## [0.1.1] - 2026-09-17
+
+### Fixed
+
+- Wait for iOS Simulator boot completion before opening the mirror.
+- Retry unavailable accessibility bounds automatically and load screenshots independently.
+- Show capture failures and clear stale element targets when detection fails.
+
+### Added
+
+- Keyboard-accessible element picker and actions, with Escape and focus restoration.
+- Accessible status messages, responsive controls and reduced-motion support.
+
 ## [0.1.0] - 2026-08-27
 
 First public release.

@@ -5,23 +5,23 @@
       "USER_EMAIL": "demo@example.com"
     },
     "staging": {
-      "BASE_URL": "https://staging.api.portal.myconneqt.com"
+      "BASE_URL": "https://staging.api.portal.com"
     },
     "prod": {
-      "BASE_URL": "https://api.portal.myconneqt.com"
+      "BASE_URL": "https://api.portal.com"
     },
     "test": {
       "variables": {
-        "BASE_URL": "https://testing.api.portal.myconneqt.com"
+        "BASE_URL": "https://testing.api.portal.com"
       },
       "includeTags": [],
       "excludeTags": []
     },
     "iOS": {
-      "APP_BUNDLE_ID": "com.conneqthealth.conneqt"
+      "WIKI_APP_ID": "org.wikipedia"
     },
     "Android": {
-      "APP_BUNDLE_ID": "com.conneqthealth.conneqt"
+      "WIKI_APP_ID": "org.wikimedia.wikipedia"
     }
   }
 }
