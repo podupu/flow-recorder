@@ -1,8 +1,0 @@
-appId: com.conneqthealth.conneqt
----
-- assertVisible:
-      text: Welcome
-- assertVisible:
-      text: Welcome to the CONNEQT App, your all-in-one companion for tracking and optimizing your arterial health.
-- tapOn:
-      text: Skip

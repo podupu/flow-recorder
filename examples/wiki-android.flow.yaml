@@ -1,0 +1,12 @@
+appId: org.wikipedia
+---
+- launchApp:
+    clearState: true
+- assertVisible:
+    text: All the world's knowledge
+- assertVisible:
+    text: Wikipedia is a free online encyclopedia with 65 million articles collaboratively written and maintained in more than 300 languages by a community of volunteers.
+- tapOn:
+    text: Learn more about Wikipedia
+- assertVisible:
+    text: Wikipedia:About

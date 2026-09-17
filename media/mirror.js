@@ -6,6 +6,12 @@
   const overlay = document.getElementById('overlay');
   const img = new Image();
   let frameLoaded = false;
+  let hierarchyReady = false;
+  let recording = false;
+  const recordingToggle = document.getElementById('recording-toggle');
+  recordingToggle.addEventListener('click', () => {
+    vscode.postMessage({ type: 'setRecording', value: !recording });
+  });
   let elements = [];
   // Soft-keyboard region (0-1 fractions) or null. The IME is a separate window that never
   // appears in the hierarchy dump, so points inside it must not resolve to the app view behind.
@@ -26,14 +32,30 @@
 
   window.addEventListener('message', (event) => {
     const msg = event.data;
-    if (msg.type === 'frame') {
+    if (msg.type === 'recordingState') {
+      recording = msg.recording === true;
+      recordingToggle.setAttribute('aria-pressed', String(recording));
+      recordingToggle.textContent = recording ? 'Stop recording' : 'Start recording';
+      document.getElementById('recording-label').textContent = recording
+        ? 'Recording — interactions append steps to the flow below.'
+        : 'Control only — interactions do not change your flow.';
+    } else if (msg.type === 'frame') {
       img.src = 'data:image/png;base64,' + msg.data;
     } else if (msg.type === 'elements') {
+      hierarchyReady = true;
       elements = msg.nodes || [];
       keyboard = msg.keyboard || null;
       renderKeyboardMask();
       renderOverlay();
       showCoverageNote(msg.coverageNote);
+      renderElementPicker();
+    } else if (msg.type === 'frameError') {
+      frameLoaded = false;
+      const banner = document.getElementById('frame-banner');
+      if (banner.textContent !== msg.text) banner.textContent = msg.text;
+      banner.classList.remove('hidden');
+    } else if (msg.type === 'frameOk') {
+      document.getElementById('frame-banner').classList.add('hidden');
     } else if (msg.type === 'status') {
       showStatus(msg.text);
     } else if (msg.type === 'hierarchyError') {
@@ -68,11 +90,16 @@
   function showHierarchyProblem(text) {
     const banner = document.getElementById('hierarchy-banner');
     if (!banner) return;
-    banner.textContent = text;
+    if (banner.textContent !== text) banner.textContent = text;
     banner.classList.remove('hidden');
     elements = [];
+    hierarchyReady = false;
+    keyboard = null;
+    renderKeyboardMask();
+    showCoverageNote('');
     updateHover(null);
     renderOverlay();
+    renderElementPicker();
   }
 
   function clearHierarchyProblem() {
@@ -259,6 +286,10 @@
   canvas.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
     if (!frameLoaded) return;
+    if (!hierarchyReady) {
+      showStatus('Waiting for element detection. The mirror will reconnect automatically.');
+      return;
+    }
     const p = toPct(e.clientX, e.clientY);
     gesture = { start: p, last: p, held: false, moved: false, startTime: Date.now() };
     gesture.holdTimer = setTimeout(() => { gesture.held = true; }, 500);
@@ -421,6 +452,52 @@
   // --- Right-click context menu ---
   const contextMenu = document.getElementById('context-menu');
   let menuTarget = null;
+  let menuOpener = null;
+  const elementPicker = document.getElementById('element-picker');
+  const elementActions = document.getElementById('element-actions');
+  let pickerSignature = '';
+
+  function elementKey(e) {
+    return JSON.stringify([e.selector, e.left, e.top, e.width, e.height]);
+  }
+
+  function renderElementPicker() {
+    const choices = sortByReadingOrder(elements.filter((e) => !nearFullscreen(e)));
+    const signature = JSON.stringify(choices);
+    if (signature === pickerSignature) return;
+    pickerSignature = signature;
+    // A new hierarchy can reuse an id for a different element; discard open stale actions.
+    hideMenu();
+    const previous = elementPicker.value;
+    elementPicker.replaceChildren();
+    for (const [index, e] of choices.entries()) {
+      const option = document.createElement('option');
+      option.value = elementKey(e);
+      option.textContent = `${index + 1}. ${elementLabel(e)}${e.className ? ' · ' + e.className : ''}`;
+      elementPicker.appendChild(option);
+    }
+    elementPicker.disabled = choices.length === 0;
+    elementActions.disabled = choices.length === 0;
+    if (!choices.length) {
+      const option = document.createElement('option');
+      option.textContent = hierarchyReady ? 'No elements detected' : 'Waiting for element detection…';
+      elementPicker.appendChild(option);
+    } else if (choices.some((e) => elementKey(e) === previous)) {
+      elementPicker.value = previous;
+    }
+  }
+
+  elementPicker.addEventListener('change', () => {
+    updateHover(elements.find((e) => elementKey(e) === elementPicker.value));
+  });
+  elementActions.addEventListener('click', (event) => {
+    event.stopPropagation();
+    menuTarget = elements.find((e) => elementKey(e) === elementPicker.value);
+    if (!menuTarget) return;
+    updateHover(menuTarget);
+    const bounds = elementActions.getBoundingClientRect();
+    showMenu(bounds.left, bounds.bottom);
+  });
 
   function menuItem(label, onClick, extraClass) {
     const item = document.createElement('button');
@@ -445,6 +522,7 @@
     const input = document.createElement('input');
     input.type = type || 'text';
     input.placeholder = placeholder || '';
+    if (placeholder) input.setAttribute('aria-label', placeholder);
     if (value !== undefined) input.value = value;
     // Typing in a field must not bubble out and close the menu.
     input.addEventListener('click', (e) => e.stopPropagation());
@@ -477,6 +555,7 @@
     const head = document.createElement('button');
     head.type = 'button';
     head.className = 'menu-group-head';
+    head.setAttribute('aria-expanded', 'false');
     head.innerHTML = '<span class="menu-caret">›</span>';
     head.appendChild(document.createTextNode(' ' + title));
 
@@ -486,6 +565,7 @@
     head.addEventListener('click', (e) => {
       e.stopPropagation();
       const open = wrap.classList.toggle('open');
+      head.setAttribute('aria-expanded', String(open));
       if (open && !bodyEl.dataset.built) {
         build(bodyEl);
         bodyEl.dataset.built = '1';
@@ -507,6 +587,10 @@
   }
 
   function elementAction(action) {
+    if (!recording && (action === 'assertVisible' || action === 'assertNotVisible')) {
+      showStatus('Start recording before adding an assertion.');
+      return;
+    }
     const el = targetElement();
     if (!el) {
       showStatus('Right-click an element to use this action');
@@ -648,11 +732,13 @@
   let menuAnchor = { x: 0, y: 0 };
 
   function showMenu(x, y) {
+    menuOpener = document.activeElement;
     menuAnchor = { x, y };
     buildMenu();
     contextMenu.classList.remove('hidden');
     contextMenu.classList.add('show');
     keepMenuOnScreen();
+    contextMenu.querySelector('button')?.focus();
   }
 
   /** Re-run after the menu changes size, e.g. when a group is expanded. */
@@ -677,9 +763,24 @@
   }
 
   function hideMenu() {
+    const hadFocus = contextMenu.contains(document.activeElement);
     contextMenu.classList.add('hidden');
     contextMenu.classList.remove('show');
+    if (hadFocus && menuOpener) menuOpener.focus();
   }
+
+  contextMenu.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      hideMenu();
+    }
+  });
+  contextMenu.addEventListener('focusout', () => {
+    setTimeout(() => {
+      if (!contextMenu.contains(document.activeElement)) hideMenu();
+    }, 0);
+  });
 
   canvas.addEventListener('contextmenu', (e) => {
     e.preventDefault();

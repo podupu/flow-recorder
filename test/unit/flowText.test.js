@@ -14,6 +14,10 @@ describe('serialising a step to a YAML list item', () => {
     assert.strictEqual(stepToYamlItem({ takeScreenshot: 'assets/a.png' }), '- takeScreenshot: assets/a.png\n');
   });
 
+  it('renders a null command as an empty mapping', () => {
+    assert.strictEqual(stepToYamlItem({ launchApp: null }), '- launchApp:\n');
+  });
+
   it('does not wrap long expressions', () => {
     // yaml.dump folds long lines by default, which would corrupt a ${...} expression.
     const long = { evalScript: "${output.api1 = http.get('https://staging.api.portal.myconneqt.com/api/v1/resource')}" };

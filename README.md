@@ -1,20 +1,52 @@
 # Flow Recorder
 
-**Record [Maestro](https://maestro.dev) mobile tests by tapping a mirrored device — without leaving your editor.**
+**The open-source [Maestro](https://maestro.dev) Studio alternative inside VS Code.**
+
+Record, inspect, replay and debug Maestro mobile tests from the editor where your flow files
+already live. Mirror an Android device or iOS Simulator, tap a real UI element, and get readable
+Maestro YAML with a selector instead of guessing coordinates.
 
 Your device appears in a VS Code panel. Hover to see what each element resolves to, click to
 record a step. The flow is written as ordinary YAML you can read, edit and commit.
 
 Works with **Android** devices and emulators, and **iOS Simulators**.
 
+> Early release: the fastest way to help is to try it on your app and report the device,
+> platform, and failing command in an issue.
+
+## Why Flow Recorder?
+
+| | Flow Recorder | Maestro Studio | Manual YAML |
+|---|---|---|---|
+| Open source | Yes | No | Yes |
+| Lives beside your flow files | Yes, inside VS Code | Separate app | Yes |
+| Tap-to-record selectors | Yes | Yes | No |
+| Live replay without relaunching | Yes | No | No |
+| Broken-selector diagnosis | Yes | No | No |
+| Testing sidebar and gutter runs | Yes | No | No |
+
+## Install in 60 seconds
+
+1. Download the latest `.vsix` from [GitHub Releases](https://github.com/podupu/flow-recorder/releases).
+2. In VS Code, open **Extensions**, choose `...`, then **Install from VSIX...**.
+3. Open a `*.flow.yaml` file and run **Flow Recorder: Start Device Mirror**.
+
+For local development:
+
+```bash
+npm install
+npm run compile
+npm run package:vsix
+```
+
+The package command includes runtime dependencies. Do not use `--no-dependencies`: the extension
+will install but fail to activate because modules such as `js-yaml` are missing.
+
+## Demo
+
+Watch the short walkthrough: [Open-source Maestro Studio alternative inside VS Code](https://youtu.be/MTSeBfaS6dM).
+
 ---
-
-## Why
-
-Maestro Studio already lets you author flows — in a separate window, away from the file you
-are editing and the rest of your project. Flow Recorder puts that loop inside the editor, and
-adds the part that actually costs time once a suite exists: finding out **which selector
-broke** when the UI changed.
 
 ## What it does
 
@@ -25,8 +57,9 @@ devices, Android emulators and iOS Simulators all appear in one list — a shut-
 is booted for you.
 
 Hover an element to see its outline and the selector it resolves to. Tap, long-press,
-double-tap and swipe are recorded as official Maestro steps, appended to whichever flow you
-are looking at.
+double-tap and swipe control the device without editing your flow by default. Click
+**Start recording** to append interactions as Maestro steps to the displayed flow;
+**Stop recording** returns to control-only mode. Every new mirror starts with recording off.
 
 ### Find broken selectors before a run fails
 
@@ -126,6 +159,19 @@ Custom patterns replace the defaults rather than adding to them. Matching every 
 possible but not recommended — `docker-compose.yaml`, CI workflows and k8s manifests would
 gain Flow Recorder commands and show up in the Testing view.
 
+## Sample Wikipedia flows
+
+The [`examples/`](examples/) folder includes standard cross-platform flows for the official
+Wikipedia app:
+
+- [`wiki-android.flow.yaml`](examples/wiki-android.flow.yaml) uses Android package `org.wikipedia`.
+- [`wiki-ios.flow.yaml`](examples/wiki-ios.flow.yaml) uses iOS bundle ID `org.wikimedia.wikipedia`.
+- [`subflows/`](examples/subflows/) contains reusable launch, search, and open-page steps.
+
+Install Wikipedia on the target device or simulator first, then open the platform flow in VS
+Code and run it from the Testing view. The sample searches for `Maestro` and opens the
+`Maestro (software)` result; edit those values when the app language or UI changes.
+
 ## Starting the mirror
 
 Open a flow file, then open the Command Palette and run **Flow Recorder: Start Device Mirror**.
@@ -156,6 +202,11 @@ iOS Simulators · iOS 18.5
 Running devices come first, then simulators grouped by OS version, **newest first**. Anything
 marked **will boot** is started for you — including stopped Android emulators — so you do not
 need to launch anything beforehand.
+
+For iOS, the picker waits for Simulator to finish booting before opening the mirror, including
+devices that already report **Booted** while startup is still in progress. A progress notification
+shows the selected device and runtime. Accessibility can take longer to become available; the
+mirror continues retrying element detection after boot completes.
 
 ### Android
 
@@ -217,7 +268,20 @@ brew tap facebook/fb && brew install idb-companion && pip3 install fb-idb
 Without `idb` the picker will tell you rather than opening a mirror whose taps silently do
 nothing.
 
+**Xcode 27 / iOS 27:** use `fb-idb` and `idb-companion` **1.5.9 or newer**. The old
+1.1.8 companion can return one zero-sized node on an awake simulator, and its input driver
+depends on a framework no longer at the expected Xcode path. Update both components
+(`brew upgrade facebook/fb/idb-companion` and `pipx upgrade fb-idb` for pipx installations).
+Restart old companion processes after upgrading and disconnect their stale idb connections.
+Flow Recorder switches to `--api axbridge` when the host accessibility API fails, and keeps
+using that backend for the device. It does not press Home to try to repair accessibility.
+
 ### Show every element at once
+
+For keyboard access, use **Detected elements** below the mirror, choose an element, and
+open **Actions** to tap, type or add an assertion. Use Tab to move through the controls and
+Escape to close Actions and return focus. The picker follows the same reading order as the
+numbered inspector.
 
 Hovering shows one element at a time. Click the eye icon in the nav bar (or the keyboard
 shortcut, if you've bound one) to switch to Maestro Studio's inspector view instead: every
@@ -309,10 +373,15 @@ Stated plainly, because discovering them yourself is worse:
   accessibility label - so a signup form's "First Name", "Email Address" and so on are read
   from there. Scoped to text fields only, since a slider or switch's value ("50%", "1") is not
   a name.
-- **A sleeping iOS Simulator has nothing to mirror.** It reports a zero-size screen rather
-  than an error, so the mirror presses Home to wake it and retries, then explains the state if
-  that does not help. A *locked* simulator is different: it has a real lock screen, which the
-  mirror shows faithfully — swipe up in the mirror to unlock it, as you would on the device.
+- **iOS may temporarily return no accessibility bounds.** This can happen while the simulator
+  is starting or asleep; it does not prove the screen is locked. Screenshots load independently,
+  and element detection retries automatically without reopening the mirror. Open or unlock the
+  simulator and bring your app forward. If the problem persists, check `idb` compatibility with
+  that runtime. Taps wait until usable accessibility bounds return, because screenshot pixels
+  are not the same coordinate space as iOS input points.
+- **Capture and element-detection failures are reported separately.** Persistent banners show
+  what is unavailable and clear on recovery. Reload retries both; stale element targets are
+  removed when detection fails.
 
 ## Telemetry
 

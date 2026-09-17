@@ -64,7 +64,8 @@ function mountMirror() {
   const w = dom.window;
   // The webview host object and canvas 2D context do not exist under jsdom; the overlay does
   // not depend on either, so stub just enough for the script to initialise.
-  w.acquireVsCodeApi = () => ({ postMessage() {}, getState() {}, setState() {} });
+  w.sentMessages = [];
+  w.acquireVsCodeApi = () => ({ postMessage(msg) { w.sentMessages.push(msg); }, getState() {}, setState() {} });
   w.HTMLCanvasElement.prototype.getContext = () => ({ drawImage() {} });
   for (const script of w.document.querySelectorAll('script')) w.eval(script.textContent);
   return w;
@@ -76,6 +77,45 @@ function send(w, nodes, coverageNote) {
 }
 
 describe('mirror overlay rendering', () => {
+  it('offers element actions through native controls and restores focus on Escape', async () => {
+    const w = mountMirror();
+    await send(w, signupElements());
+    const picker = w.document.getElementById('element-picker');
+    const actions = w.document.getElementById('element-actions');
+    assert.strictEqual(picker.disabled, false);
+    assert.strictEqual(picker.options.length, 5);
+    actions.focus();
+    actions.click();
+    const menu = w.document.getElementById('context-menu');
+    assert.ok(menu.contains(w.document.activeElement));
+    const group = menu.querySelector('.menu-group-head');
+    assert.strictEqual(group.getAttribute('aria-expanded'), 'false');
+    group.click();
+    assert.strictEqual(group.getAttribute('aria-expanded'), 'true');
+    assert.ok(menu.querySelector('input[type="text"]').getAttribute('aria-label'));
+    menu.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    assert.ok(menu.classList.contains('hidden'));
+    assert.strictEqual(w.document.activeElement, actions);
+    actions.click();
+    menu.querySelector('button').click();
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(w.sentMessages.at(-1))), { type: 'elementTap', elementId: 1 });
+    w.close();
+  });
+
+  it('clears stale targets and enables the picker again after hierarchy recovery', async () => {
+    const w = mountMirror();
+    const nodes = signupElements();
+    await send(w, nodes, 'Old coverage note');
+    w.postMessage({ type: 'hierarchyError', text: 'Retrying accessibility…' }, '*');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.strictEqual(w.document.getElementById('element-picker').disabled, true);
+    assert.strictEqual(w.document.getElementById('overlay').children.length, 0);
+    assert.ok(w.document.getElementById('coverage-note').classList.contains('hidden'));
+    await send(w, nodes);
+    assert.strictEqual(w.document.getElementById('element-picker').disabled, false);
+    w.close();
+  });
+
   it('draws a box for every element once a payload arrives', async () => {
     const w = mountMirror();
     const nodes = signupElements();

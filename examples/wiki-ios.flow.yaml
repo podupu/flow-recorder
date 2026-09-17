@@ -1,0 +1,17 @@
+# Official Wikipedia iOS app: https://apps.apple.com/us/app/wikipedia/id324715238
+# The production bundle identifier is org.wikimedia.wikipedia.
+# Install the app in an iOS Simulator before running this flow.
+appId: org.wikimedia.wikipedia
+---
+- runFlow:
+    file: subflows/wiki-launch.flow.yaml
+    env:
+      WIKI_APP_ID: org.wikimedia.wikipedia
+- runFlow:
+    file: subflows/wiki-search.flow.yaml
+    env:
+      WIKI_QUERY: Maestro
+- runFlow:
+    file: subflows/wiki-open-page.flow.yaml
+    env:
+      WIKI_PAGE_TITLE: Maestro (software)

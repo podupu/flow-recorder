@@ -106,12 +106,13 @@ export async function pickDevice(): Promise<DeviceDriver | undefined> {
         label: `${s.booted ? '$(device-mobile)' : '$(debug-start)'} ${s.name}`,
         description: s.booted ? `${s.runtime} · booted` : 'will boot',
         make: async () => {
-          if (!s.booted) {
-            await vscode.window.withProgress(
-              { location: vscode.ProgressLocation.Notification, title: `Booting ${s.name}...` },
-              () => idb.bootSimulator(s.udid)
-            );
-          }
+          await vscode.window.withProgress(
+            {
+              location: vscode.ProgressLocation.Notification,
+              title: `Preparing ${s.name} (${s.runtime}) — waiting for startup...`
+            },
+            () => idb.bootSimulator(s.udid)
+          );
           return new IosDriver(s.udid);
         }
       });
@@ -136,7 +137,13 @@ export async function pickDevice(): Promise<DeviceDriver | undefined> {
   });
   if (!picked || !picked.make) return undefined;
 
-  const driver = await picked.make();
+  let driver: DeviceDriver | undefined;
+  try {
+    driver = await picked.make();
+  } catch (err: any) {
+    vscode.window.showErrorMessage(`Could not prepare device: ${err.message}`);
+    return undefined;
+  }
   if (!driver) return undefined;
 
   // iOS element detection and input both require idb; screenshots alone would be a

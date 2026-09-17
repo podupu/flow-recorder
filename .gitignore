@@ -3,7 +3,16 @@ out/
 .vscode-test/
 *.vsix
 .superpowers/
-
+!examples/
+examples/*
+!examples/wiki-android.flow.yaml
+!examples/wiki-ios.flow.yaml
+!examples/subflows/
+examples/subflows/*
+!examples/subflows/wiki-launch.flow.yaml
+!examples/subflows/wiki-search.flow.yaml
+!examples/subflows/wiki-open-page.flow.yaml
+.github/**
 # Maestro debug artifacts from the Testing view
 .maestro-debug/
 
